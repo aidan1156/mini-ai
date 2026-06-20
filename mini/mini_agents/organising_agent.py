@@ -33,7 +33,7 @@ class OrganisingAgent:
             skills_formatted = ""
 
         prompt = f"""You are an assistant called Mini. 
-        The current date and time is {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. 
+        The current date and time is {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. Please try to keep responses concise and to the point, unless otherwise requested.
         {skills_formatted}
         """
 

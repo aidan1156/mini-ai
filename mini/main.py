@@ -1,10 +1,9 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
 
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy import create_engine
-from pydantic import BaseModel
+
 import uvicorn
 from dotenv import load_dotenv
 
@@ -13,6 +12,7 @@ from mini.config import load_config
 from mini.context import AppContext
 from mini.mini_agents.browser_agent import BrowserAgent
 from mini.mini_agents.general_agent import GeneralAgent
+from mini.public_models import SendMessageRequest, SendMessageResponse
 from mini.mini_agents.organising_agent import OrganisingAgent
 
 load_dotenv()  
@@ -53,18 +53,12 @@ def get_context(request: Request) -> AppContext:
     return request.app.state.context
 
 
-class SendMessageRequest(BaseModel):
-    message: str
-    conversation_id: int | None = None
 
 
 @app.post("/send-message")
-def send_message(payload: SendMessageRequest, context: AppContext = Depends(get_context)) -> dict[str, Any]:
+def send_message(payload: SendMessageRequest, context: AppContext = Depends(get_context)) -> SendMessageResponse:
     response, conversation_id = context.organising_agent.create_agent(payload.message, conversation_id=payload.conversation_id)
-    return {
-        "response": response,
-        "conversation_id": conversation_id
-    }
+    return SendMessageResponse(response=response, conversation_id=conversation_id)
 
 if __name__ == "__main__":
     uvicorn.run("mini.main:app", host=config.server.host, port=config.server.port, reload=True)
