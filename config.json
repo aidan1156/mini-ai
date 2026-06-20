@@ -1,0 +1,8 @@
+{
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8000
+    },
+    "database_path": "data/database.db",
+    "workspace_path": "workspace/"
+}
