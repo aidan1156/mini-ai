@@ -1,14 +1,19 @@
 """Where the orchestrator's messages about worker updates go in the user's chat.
 
 Each worker turn has an owner: the chat message it's working for, stored on
-its messages as `WorkerMessage.owner_message_id`. The rules:
+its messages as `WorkerMessage.owner_message_id`. A turn started without an
+owner inherits the conversation's latest owner, so a conversation's updates
+keep landing in the same place.
 
-- A turn started without an owner inherits the conversation's latest owner,
-  so a conversation's updates keep landing in one thread.
-- Owner is top-level: the orchestrator chooses between replying in its
-  thread and posting top-level (e.g. for a quick check).
-- Owner is itself a reply: the message always goes in that thread.
-- No owner: the message is posted top-level and becomes the owner of the
+Where to reply is decided once per owner, when the orchestrator first replies
+to the user's message: in a thread under it, or top-level for small things.
+Updates then follow the conversation (see `update_parent`):
+
+- Owner is itself a reply: always that thread.
+- There's a thread under the owner, or the owner is one of the orchestrator's
+  own messages: that thread.
+- Otherwise (the orchestrator replied top-level): top-level.
+- No owner: top-level, and the message becomes the owner of the
   conversation's messages (see `adopt`), so later updates go in its thread.
 """
 
@@ -35,21 +40,20 @@ def resolve_owner(engine: Engine, conversation_id: int, owner_message_id: int | 
         )
 
 
-def can_choose_thread(owner: ChatMessage | None) -> bool:
-    """Whether the orchestrator gets to pick thread vs top-level for its message."""
-    return owner is not None and owner.parent_id is None
-
-
-def reply_parent(owner: ChatMessage | None, in_thread: bool) -> int | None:
-    """The parent_id for a message about the owner's work.
-
-    `in_thread` only counts when the owner is top-level (see can_choose_thread).
-    """
+def update_parent(engine: Engine, owner: ChatMessage | None) -> int | None:
+    """The parent_id for an update about the owner's work."""
     if owner is None:
         return None
     if owner.parent_id is not None:
-        return owner.parent_id  # owner is in a thread: always reply there
-    return owner.id if in_thread else None
+        return owner.parent_id
+    if owner.role == "assistant":
+        return owner.id  # the orchestrator's own message, adopted as the owner
+
+    with Session(engine) as session:
+        has_thread = session.scalar(
+            select(ChatMessage.id).where(ChatMessage.parent_id == owner.id).limit(1)
+        ) is not None
+    return owner.id if has_thread else None
 
 
 def adopt(engine: Engine, owner_message_id: int, conversation_ids: Collection[int]) -> None:

@@ -2,11 +2,14 @@
 
 It runs a turn in two cases:
 
-- `handle_user_message`: the user said something. Its final text is posted as
-  the reply, next to the user's message (in the same thread, if any).
+- `handle_user_message`: the user said something. For a top-level message it
+  chooses whether to reply inline or in a thread under it.
 - `on_worker_turn_end`: a worker session finished a turn. The orchestrator is
-  shown the result and decides whether to tell the user, via its
-  send_chat_message tool (see mini.orchestrator.owners for where it goes).
+  shown the result and decides whether to tell the user. Its message goes
+  wherever the conversation about that work already is (see
+  mini.orchestrator.owners).
+
+Either way it talks to the user with its send_chat_message tool.
 
 Turns run one at a time. Worker updates that arrive while a turn is running
 are batched, one orchestrator turn per owner message.
@@ -24,7 +27,7 @@ from sqlalchemy.orm import Session
 from mini.database.models import ChatMessage, WorkerConversation
 from mini.llm import LLM, Message
 from mini.orchestrator import chat, context
-from mini.orchestrator.owners import adopt, can_choose_thread, resolve_owner
+from mini.orchestrator.owners import adopt, resolve_owner, update_parent
 from mini.orchestrator.tools import ToolRunner, run_tool
 
 logger = logging.getLogger(__name__)
@@ -44,8 +47,12 @@ The time is currently {now}.
   the user what you've set going; you'll get a <worker_update> when it finishes.
 - Answer questions about ongoing work by reading the relevant conversation.
 - Give workers self-contained prompts: they can't see this chat.
-- Chat messages are prefixed with [#id] or [#id in thread #root] so you can tell
-  them apart. Don't write these prefixes yourself.
+- The user only sees what you send with send_chat_message.
+- For a top-level message, choose in_thread: false for quick answers and small
+  tasks, true for bigger work with several updates to come. Updates about the
+  work later go wherever your first reply went.
+- The user's messages are prefixed with [#id] or [#id in thread #root]. Don't
+  write these prefixes yourself.
 - Be brief.
 
 Recently used worker conversations:
@@ -61,20 +68,27 @@ class Orchestrator:
         self._pending: set[int] = set()  # conversations with unhandled updates
         self._drain_task: asyncio.Task | None = None
 
-    async def handle_user_message(self, content: str, parent_id: int | None = None) -> ChatMessage | None:
-        """Save the user's message, run the orchestrator, and return its reply (if any)."""
+    async def handle_user_message(self, content: str, parent_id: int | None = None) -> list[ChatMessage]:
+        """Save the user's message, run the orchestrator, and return the messages it sent."""
         user_message = chat.send_message(self.engine, "user", content, parent_id)
 
         async with self._lock:
             messages = context.chat_history(self.engine, user_message, HISTORY_TOKENS, exclude={user_message.id})
             messages.append(Message(role="user", content=f"{context.label(user_message)} {content}"))
 
-            runner = ToolRunner(self.engine, self.on_worker_turn_end, owner_id=user_message.id)
-            reply = await self._run(messages, runner)
+            # Reply next to the user's message, or (if it's top-level) optionally in a thread under it.
+            runner = ToolRunner(
+                self.engine, self.on_worker_turn_end, owner_id=user_message.id,
+                parent_id=user_message.parent_id,
+                thread_under=user_message.id if user_message.parent_id is None else None,
+            )
+            final_text = await self._run(messages, runner)
 
-        if not reply:
-            return None
-        return chat.send_message(self.engine, "assistant", reply, user_message.parent_id)
+            # If it answered in plain text instead of using the tool, send that.
+            if final_text and not runner.posted:
+                await runner.send_chat_message(final_text)
+
+        return runner.posted
 
     async def on_worker_turn_end(self, conversation_id: int) -> None:
         """Pass to workers as `on_turn_end`. Queues the update and returns straight away."""
@@ -107,9 +121,9 @@ class Orchestrator:
 
         runner = ToolRunner(
             self.engine, self.on_worker_turn_end, owner_id=owner_id,
-            can_post=True, update_owner=owner,
+            parent_id=update_parent(self.engine, owner),
         )
-        await self._run(messages, runner)  # it talks to the user via send_chat_message
+        await self._run(messages, runner)  # plain final text is ignored: saying nothing is allowed
 
         if owner is None and runner.posted:
             adopt(self.engine, runner.posted[0].id, {*conversation_ids, *runner.touched})
@@ -139,14 +153,9 @@ class Orchestrator:
                 parts.append("Other conversations working for it:")
                 parts += [f"- {context.describe(c)}" for c in others]
 
-            if can_choose_thread(owner):
-                parts.append(
-                    f"To tell the user, call send_chat_message with in_thread=true to reply in the "
-                    f"thread under #{owner.id} (for anything substantial), or in_thread=false to "
-                    f"post top-level (for a quick note)."
-                )
-            else:
-                parts.append(f"Messages you send will go in thread #{owner.parent_id}.")
+            parent_id = update_parent(self.engine, owner)
+            where = f"in thread #{parent_id}" if parent_id is not None else "top-level, like your earlier reply"
+            parts.append(f"Messages you send with send_chat_message will go {where}.")
 
         parts.append(
             "If nothing needs saying yet (e.g. other conversations are still working on the "

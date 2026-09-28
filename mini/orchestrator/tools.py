@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from mini.database.models import ChatMessage, WorkerConversation
 from mini.llm import Tool, ToolCall
 from mini.orchestrator import chat, context
-from mini.orchestrator.owners import can_choose_thread, reply_parent, resolve_owner
+from mini.orchestrator.owners import resolve_owner
 from mini.workers import worker
 from mini.workers.worker import TurnEndHandler, WorkerBusyError, WorkerError
 
@@ -37,8 +37,9 @@ class ToolRunner:
     """The tools for one orchestrator turn, and the state they share.
 
     `owner_id` is the chat message that worker prompts sent this turn work for.
-    `update_owner` is set when the turn is reacting to a worker update, and is
-    where send_chat_message posts (see mini.orchestrator.owners).
+    send_chat_message posts with `parent_id`, or, if `thread_under` is given,
+    the model can choose to start a thread under that message instead. Once
+    it has posted, later messages this turn go in the same place.
     """
 
     def __init__(
@@ -46,19 +47,19 @@ class ToolRunner:
         engine: Engine,
         on_turn_end: TurnEndHandler,
         owner_id: int | None,
-        can_post: bool = False,
-        update_owner: ChatMessage | None = None,
+        parent_id: int | None,
+        thread_under: int | None = None,
     ):
         self.engine = engine
         self.on_turn_end = on_turn_end
         self.owner_id = owner_id
-        self.can_post = can_post
-        self.update_owner = update_owner
+        self.parent_id = parent_id
+        self.thread_under = thread_under
         self.touched: set[int] = set()  # conversations started or messaged this turn
         self.posted: list[ChatMessage] = []
 
     def tools(self) -> list[Tool]:
-        tools = [
+        return [
             Tool(
                 name="start_conversation",
                 description=(
@@ -125,23 +126,25 @@ class ToolRunner:
                 },
                 handler=self._search_conversations,
             ),
+            self._send_chat_message_tool(),
         ]
-        if self.can_post:
-            tools.append(self._send_chat_message_tool())
-        return tools
 
     def _send_chat_message_tool(self) -> Tool:
         properties: dict[str, Any] = {"content": {"type": "string"}}
-        if can_choose_thread(self.update_owner):
+        if self.thread_under is not None:
             properties["in_thread"] = {
                 "type": "boolean",
-                "description": "true to reply in the thread under the message that asked for this work, false to post top-level.",
+                "description": (
+                    f"true to start a thread under #{self.thread_under}, for bigger work with several "
+                    "updates to come; false to reply inline, for quick answers and small tasks. "
+                    "Later updates about this work go wherever this message goes."
+                ),
             }
         return Tool(
             name="send_chat_message",
-            description="Send the user a message in the chat.",
+            description="Send the user a message in the chat. This is the only way the user sees anything you say.",
             parameters={"type": "object", "properties": properties, "required": list(properties)},
-            handler=self._send_chat_message,
+            handler=self.send_chat_message,
         )
 
     async def _start_conversation(self, prompt: str, description: str, cwd: str) -> str:
@@ -193,14 +196,14 @@ class ToolRunner:
             conversations = session.scalars(statement).all()
         return "\n".join(context.describe(c) for c in conversations) or "No matches."
 
-    async def _send_chat_message(self, content: str, in_thread: bool = True) -> str:
-        parent_id = reply_parent(self.update_owner, in_thread)
-        message = chat.send_message(self.engine, "assistant", content, parent_id)
+    async def send_chat_message(self, content: str, in_thread: bool = False) -> str:
+        parent_id = self.thread_under if in_thread and self.thread_under is not None else self.parent_id
+        message = chat.send_message(self.engine, "assistant", context.strip_label(content), parent_id)
         self.posted.append(message)
+        self.parent_id, self.thread_under = parent_id, None
 
-        if self.update_owner is None:
+        if self.owner_id is None:
             # Nobody asked for this work, so this message becomes its owner:
             # later messages and worker prompts this turn go in its thread.
-            self.update_owner = message
-            self.owner_id = message.id
+            self.owner_id = self.parent_id = message.id
         return "Sent."

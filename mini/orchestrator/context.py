@@ -1,5 +1,6 @@
 """Builds the text the orchestrator sees: chat history, worker transcripts, etc."""
 
+import re
 from collections.abc import Collection
 
 from sqlalchemy import Engine, or_, select
@@ -10,6 +11,8 @@ from mini.llm import Message
 
 # Rough conversion for capping text by tokens without a tokenizer.
 CHARS_PER_TOKEN = 4
+
+LEADING_LABEL = re.compile(r"^\s*\[#\d+[^\]]*\]\s*")
 
 
 def chat_history(
@@ -22,7 +25,8 @@ def chat_history(
 
     Includes the most recent top-level messages plus the whole of `focus`'s
     thread (the thread it's in, or the one under it), newest kept first when
-    over `max_tokens`. Each message is prefixed with its id and thread.
+    over `max_tokens`. The user's messages are prefixed with their id and
+    thread; the orchestrator's aren't, so it doesn't copy the prefixes.
     """
     budget = max_tokens * CHARS_PER_TOKEN
     picked: dict[int, ChatMessage] = {}
@@ -55,13 +59,21 @@ def chat_history(
 
     # Oldest first, with each thread's replies straight after the message that started it.
     ordered = sorted(picked.values(), key=lambda m: (m.parent_id or m.id, m.id))
-    return [Message(role=m.role, content=f"{label(m)} {m.content}") for m in ordered]
+    return [
+        Message(role=m.role, content=f"{label(m)} {m.content}" if m.role == "user" else m.content)
+        for m in ordered
+    ]
 
 
 def label(message: ChatMessage) -> str:
     if message.parent_id is None:
         return f"[#{message.id}]"
     return f"[#{message.id} in thread #{message.parent_id}]"
+
+
+def strip_label(text: str) -> str:
+    """Remove a leading [#id] prefix, in case the model copies the format anyway."""
+    return LEADING_LABEL.sub("", text, count=1)
 
 
 def recent_conversations(engine: Engine, n: int) -> str:
