@@ -29,6 +29,9 @@ POLL_INTERVAL = 3
 MAX_WAIT_SECONDS = 240
 # Hard cap on what one browse task can spend; workers can only go lower.
 MAX_COST_USD = 2.0
+# Always use Browser Use's own model (the API otherwise defaults to Claude).
+# Tiers: bu-mini, bu-max, bu-ultra.
+MODEL = "bu-mini"
 
 mcp = FastMCP("browser")
 _client: AsyncBrowserUse | None = None
@@ -53,7 +56,7 @@ async def browse(
 
     Describe the task fully (what to find or do, and what to report back),
     since the agent sees nothing else from this session. The browser isn't
-    signed into any accounts. Each task can spend at most $1
+    signed into any accounts. Each task can spend at most $2
     (`max_cost_usd`, which can only be lowered).
 
     Waits up to `wait_seconds` (max 240) for the agent to finish. If it's
@@ -64,7 +67,9 @@ async def browse(
     if start_url:
         task = f"Start at {start_url}\n\n{task}"
     try:
-        session = await _get_client().sessions.create(task, max_cost_usd=max_cost_usd)
+        session = await _get_client().sessions.create(
+            task, model=MODEL, max_cost_usd=max_cost_usd,
+        )
     except BrowserUseError as e:
         return f"Couldn't start the browser agent: {e}"
     return await _wait(str(session.id), wait_seconds)
