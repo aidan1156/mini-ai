@@ -6,7 +6,7 @@ from openai import AsyncOpenAI
 
 from mini.llm.base import Message, Tool, ToolCall
 
-DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_MODEL = "gpt-5.6-luna"
 
 
 class OpenAILLM:
