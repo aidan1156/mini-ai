@@ -6,11 +6,15 @@ from collections.abc import Collection
 from sqlalchemy import Engine, or_, select
 from sqlalchemy.orm import Session
 
-from mini.database.models import ChatMessage
+from mini.database.models import ChatMessage, WorkerConversation, WorkerMessage
 from mini.llm import Message
+from mini.orchestrator.context.conversations import describe
 from mini.orchestrator.context.utils import CHARS_PER_TOKEN
 
 LEADING_LABEL = re.compile(r"^\s*\[#\d+[^\]]*\]\s*")
+# At most this many workers in the note after the history (the most recent ones).
+MAX_LINKED_WORKERS = 30
+QUOTE_CHARS = 60
 
 
 def chat_history(
@@ -25,6 +29,9 @@ def chat_history(
     thread (the thread it's in, or the one under it), newest kept first when
     over `max_tokens`. The user's messages are prefixed with their id and
     thread; the orchestrator's aren't, so it doesn't copy the prefixes.
+
+    If any of these messages had workers started for them, a final note lists
+    those workers, so the orchestrator can check on work it set going.
     """
     budget = max_tokens * CHARS_PER_TOKEN
     picked: dict[int, ChatMessage] = {}
@@ -57,10 +64,48 @@ def chat_history(
 
     # Oldest first, with each thread's replies straight after the message that started it.
     ordered = sorted(picked.values(), key=lambda m: (m.parent_id or m.id, m.id))
-    return [
+    messages = [
         Message(role=m.role, content=f"{label(m)} {m.content}" if m.role == "user" else m.content)
         for m in ordered
     ]
+    if note := _linked_workers_note(engine, picked):
+        messages.append(Message(role="user", content=note))
+    return messages
+
+
+def _linked_workers_note(engine: Engine, messages: dict[int, ChatMessage]) -> str | None:
+    """Which workers were started for these chat messages, or None if none were."""
+    with Session(engine) as session:
+        rows = session.execute(
+            select(WorkerMessage.owner_message_id, WorkerConversation)
+            .join(WorkerConversation, WorkerConversation.id == WorkerMessage.conversation_id)
+            .where(WorkerMessage.owner_message_id.in_(messages))
+            .distinct()
+            .order_by(WorkerConversation.id.desc())
+            .limit(MAX_LINKED_WORKERS)
+        ).all()
+        if not rows:
+            return None
+        lines = [
+            f"- for {_refer_to(messages[owner_id])}: conversation {describe(c)}"
+            for owner_id, c in reversed(rows)
+        ]
+
+    return "\n".join([
+        "<linked_workers>",
+        "Automatic note, not from the user: workers started for messages above "
+        "(use read_conversation for details).",
+        *lines,
+        "</linked_workers>",
+    ])
+
+
+def _refer_to(message: ChatMessage) -> str:
+    """How the note names a message: the user's by id, the orchestrator's by quoting it."""
+    if message.role == "user":
+        return f"#{message.id}"
+    quote = message.content if len(message.content) <= QUOTE_CHARS else message.content[:QUOTE_CHARS] + "…"
+    return f'your message "{quote}"'
 
 
 def label(message: ChatMessage) -> str:

@@ -74,15 +74,22 @@ class ToolRunner:
             Tool(
                 name="start_conversation",
                 description=(
-                    "Start a new Claude Code session to work on a task in one of the projects. It runs "
-                    "in the background; you'll get an update when it finishes its turn."
+                    "Start a new Claude Code session to work on a task. It runs in the background; "
+                    "you'll get an update when it finishes its turn."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "prompt": {"type": "string", "description": "The task, with all the context the session needs."},
                         "description": {"type": "string", "description": "A short summary of the work, used to find it later."},
-                        "project": {"type": "string", "description": "The project (folder name) to work in."},
+                        "project": {
+                            "type": ["string", "null"],
+                            "description": (
+                                "The project (folder name) to work in, or null to start in the projects "
+                                "folder itself: for general tasks, or when you're not sure which project "
+                                "or whether it's possible."
+                            ),
+                        },
                     },
                     "required": ["prompt", "description", "project"],
                 },
@@ -212,10 +219,13 @@ class ToolRunner:
             handler=self.send_chat_message,
         )
 
-    async def _start_conversation(self, prompt: str, description: str, project: str) -> str:
-        path = context.project_path(self.projects_dir, project)
-        if path is None:
-            return f"Error: no project called {project!r}"
+    async def _start_conversation(self, prompt: str, description: str, project: str | None = None) -> str:
+        if project is None:
+            path = self.projects_dir  # general work: every repo is one cd away
+        else:
+            path = context.project_path(self.projects_dir, project)
+            if path is None:
+                return f"Error: no project called {project!r}"
         conversation_id = await worker.create_conversation(
             self.engine, prompt, description, path,
             owner_message_id=self.owner_id, on_turn_end=self.on_turn_end,
