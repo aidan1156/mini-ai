@@ -22,13 +22,15 @@ def chat_history(
     focus: ChatMessage | None,
     max_tokens: int,
     exclude: Collection[int] = (),
+    threads: Collection[int] = (),
 ) -> list[Message]:
     """Recent chat as LLM messages, oldest first.
 
     Includes the most recent top-level messages plus the whole of `focus`'s
-    thread (the thread it's in, or the one under it), newest kept first when
-    over `max_tokens`. The user's messages are prefixed with their id and
-    thread; the orchestrator's aren't, so it doesn't copy the prefixes.
+    thread (the thread it's in, or the one under it) and of the threads under
+    the messages in `threads`, newest kept first when over `max_tokens`. The
+    user's messages are prefixed with their id and thread; the orchestrator's
+    aren't, so it doesn't copy the prefixes.
 
     If any of these messages had workers started for them, a final note lists
     those workers, so the orchestrator can check on work it set going.
@@ -46,9 +48,11 @@ def chat_history(
                 return
             picked[message.id] = message
 
+    roots = [focus.parent_id or focus.id] if focus is not None else []
+    roots += [root_id for root_id in threads if root_id not in roots]
+
     with Session(engine) as session:
-        if focus is not None:
-            root_id = focus.parent_id or focus.id
+        for root_id in roots:
             take(session.scalars(
                 select(ChatMessage)
                 .where(or_(ChatMessage.id == root_id, ChatMessage.parent_id == root_id))
@@ -100,12 +104,36 @@ def _linked_workers_note(engine: Engine, messages: dict[int, ChatMessage]) -> st
     ])
 
 
+def thread_has_replies(engine: Engine, root_id: int) -> bool:
+    with Session(engine) as session:
+        return session.scalar(select(ChatMessage.id).where(ChatMessage.parent_id == root_id).limit(1)) is not None
+
+
+def describe_thread(engine: Engine, root_id: int) -> str:
+    """One line about the thread under `root_id`: what it's under and how it ends."""
+    with Session(engine) as session:
+        root = session.get(ChatMessage, root_id)
+        replies = session.scalars(
+            select(ChatMessage).where(ChatMessage.parent_id == root_id).order_by(ChatMessage.id)
+        ).all()
+        where = f"the thread under {_refer_to(root)}"
+        if not replies:
+            return f"{where} (no replies yet; this starts it)"
+        last = replies[-1]
+        who = "the user" if last.role == "user" else "you"
+        return f"{where} ({len(replies)} replies, the latest from {who}: {_quote(last.content)})"
+
+
 def _refer_to(message: ChatMessage) -> str:
     """How the note names a message: the user's by id, the orchestrator's by quoting it."""
     if message.role == "user":
         return f"#{message.id}"
-    quote = message.content if len(message.content) <= QUOTE_CHARS else message.content[:QUOTE_CHARS] + "…"
-    return f'your message "{quote}"'
+    return f"your message {_quote(message.content)}"
+
+
+def _quote(text: str) -> str:
+    text = " ".join(text.split())
+    return f'"{text}"' if len(text) <= QUOTE_CHARS else f'"{text[:QUOTE_CHARS]}…"'
 
 
 def label(message: ChatMessage) -> str:

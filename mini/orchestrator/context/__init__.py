@@ -3,7 +3,13 @@
 Use it as `from mini.orchestrator import context` and `context.chat_history(...)`.
 """
 
-from mini.orchestrator.context.chat_history import chat_history, label, strip_label
+from mini.orchestrator.context.chat_history import (
+    chat_history,
+    describe_thread,
+    label,
+    strip_label,
+    thread_has_replies,
+)
 from mini.orchestrator.context.conversations import (
     describe,
     owned_conversations,
@@ -16,6 +22,7 @@ from mini.orchestrator.context.transcripts import transcript
 __all__ = [
     "chat_history",
     "describe",
+    "describe_thread",
     "label",
     "owned_conversations",
     "project_path",
@@ -23,5 +30,6 @@ __all__ = [
     "recent_conversations",
     "run_conversations",
     "strip_label",
+    "thread_has_replies",
     "transcript",
 ]

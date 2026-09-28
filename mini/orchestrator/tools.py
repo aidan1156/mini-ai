@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from mini.database.models import ChatMessage, Routine, WorkerConversation
 from mini.llm import Tool, ToolCall
 from mini.orchestrator import chat, context, routines
-from mini.orchestrator.owners import resolve_owner
+from mini.orchestrator.owners import Placement, resolve_owner
 from mini.workers import worker
 from mini.workers.worker import TurnEndHandler, WorkerBusyError, WorkerError
 
@@ -40,9 +40,8 @@ class ToolRunner:
 
     `owner_id` is the chat message that worker prompts sent this turn work for.
     New workers run in a repo directly inside `projects_dir`.
-    send_chat_message posts with `parent_id`, or, if `thread_under` is given,
-    the model can choose to start a thread under that message instead. Once
-    it has posted, later messages this turn go in the same place.
+    `placement` says where send_chat_message posts, or which threads the model
+    can pick from. Once it has posted, later messages this turn go in the same place.
     Workers started this turn are part of `routine_run_id`, if set.
     `start_routine(routine_id, owner_message_id)` queues a routine run.
     """
@@ -54,8 +53,7 @@ class ToolRunner:
         start_routine: Callable[[int, int | None], None],
         projects_dir: Path,
         owner_id: int | None,
-        parent_id: int | None,
-        thread_under: int | None = None,
+        placement: Placement,
         routine_run_id: int | None = None,
     ):
         self.engine = engine
@@ -63,8 +61,7 @@ class ToolRunner:
         self.start_routine = start_routine
         self.projects_dir = projects_dir
         self.owner_id = owner_id
-        self.parent_id = parent_id
-        self.thread_under = thread_under
+        self.placement = placement
         self.routine_run_id = routine_run_id
         self.touched: set[int] = set()  # conversations started or messaged this turn
         self.posted: list[ChatMessage] = []
@@ -203,13 +200,14 @@ class ToolRunner:
 
     def _send_chat_message_tool(self) -> Tool:
         properties: dict[str, Any] = {"content": {"type": "string"}}
-        if self.thread_under is not None:
-            properties["in_thread"] = {
-                "type": "boolean",
+        if choices := self.placement.choices:
+            properties["reply_in"] = {
+                "type": ["integer", "null"],
+                "enum": [*choices, None],
                 "description": (
-                    f"true to start a thread under #{self.thread_under}, for bigger work with several "
-                    "updates to come; false to reply inline, for quick answers and small tasks. "
-                    "Later updates about this work go wherever this message goes."
+                    "null to post top-level (inline), or the id of a message to post in the thread "
+                    "under it (starting the thread if there isn't one). Only these ids are allowed. "
+                    "Later updates about this work can go there too."
                 ),
             }
         return Tool(
@@ -317,14 +315,22 @@ class ToolRunner:
         self.start_routine(routine_id, self.owner_id)
         return "The routine will run once this turn ends."
 
-    async def send_chat_message(self, content: str, in_thread: bool = False) -> str:
-        parent_id = self.thread_under if in_thread and self.thread_under is not None else self.parent_id
+    async def send_chat_message(self, content: str, reply_in: int | None = None) -> str:
+        if self.placement.choices:
+            if reply_in is not None and reply_in not in self.placement.choices:
+                return f"Error: reply_in must be null or one of {self.placement.choices}"
+            parent_id = reply_in
+        else:
+            parent_id = self.placement.parent_id  # no choice: reply_in is ignored
+
         message = chat.send_message(self.engine, "assistant", context.strip_label(content), parent_id)
         self.posted.append(message)
-        self.parent_id, self.thread_under = parent_id, None
+        # Later messages this turn go in the same place.
+        self.placement = Placement(parent_id=parent_id)
 
         if self.owner_id is None:
             # Nobody asked for this work, so this message becomes its owner:
             # later messages and worker prompts this turn go in its thread.
-            self.owner_id = self.parent_id = message.id
+            self.owner_id = message.id
+            self.placement = Placement(parent_id=message.id)
         return "Sent."

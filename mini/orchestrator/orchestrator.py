@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from mini.database.models import ChatMessage, Routine, RoutineRun, WorkerConversation
 from mini.llm import LLM, Message
 from mini.orchestrator import chat, context, routines
-from mini.orchestrator.owners import adopt, resolve_owner, update_parent
+from mini.orchestrator.owners import Placement, adopt, reply_placement, resolve_owner, update_placement
 from mini.orchestrator.tools import ToolRunner, run_tool
 
 logger = logging.getLogger(__name__)
@@ -58,9 +58,10 @@ The time is currently {now}.
   project for general tasks that aren't about one repo, or when you're not sure which
   repo; it then starts in the projects folder and can cd into any of them.
 - The user only sees what you send with send_chat_message.
-- For a top-level message, choose in_thread: false for quick answers and small
-  tasks, true for bigger work with several updates to come. Updates about the
-  work later go wherever your first reply went.
+- When send_chat_message offers reply_in, choose where to post: null (top-level,
+  inline) for quick answers and small tasks, or a message's id to post in the
+  thread under it, e.g. for bigger work with several updates to come. For updates
+  about work, prefer the thread where the user last talked about it.
 - Routines are instructions you've saved for yourself, run on a timer or when the
   user asks. When one runs you get a <routine> message with its instructions.
 - The user's messages are prefixed with [#id] or [#id in thread #root]. Don't
@@ -126,11 +127,7 @@ class Orchestrator:
             messages.append(Message(role="user", content=f"{context.label(user_message)} {user_message.content}"))
 
             # Reply next to the user's message, or (if it's top-level) optionally in a thread under it.
-            runner = self._runner(
-                owner_id=user_message.id,
-                parent_id=user_message.parent_id,
-                thread_under=user_message.id if user_message.parent_id is None else None,
-            )
+            runner = self._runner(owner_id=user_message.id, placement=reply_placement(user_message))
             final_text = await self._run(messages, runner)
 
             # If it answered in plain text instead of using the tool, send that.
@@ -148,20 +145,19 @@ class Orchestrator:
                 session.commit()
                 owner = session.get(ChatMessage, owner_message_id) if owner_message_id is not None else None
 
-            messages = context.chat_history(self.engine, owner, HISTORY_TOKENS)
-            messages.append(Message(role="user", content=self._routine_text(routine, run, owner)))
+            placement = update_placement(self.engine, owner)
+            messages = context.chat_history(self.engine, owner, HISTORY_TOKENS, threads=placement.choices)
+            messages.append(Message(role="user", content=self._routine_text(routine, run, owner, placement)))
 
-            runner = self._runner(
-                owner_id=owner_message_id,
-                parent_id=update_parent(self.engine, owner),
-                routine_run_id=run.id,
-            )
+            runner = self._runner(owner_id=owner_message_id, placement=placement, routine_run_id=run.id)
             await self._run(messages, runner)  # plain final text is ignored: saying nothing is allowed
 
             if owner is None and runner.posted:
                 adopt(self.engine, runner.posted[0].id, runner.touched)
 
-    def _routine_text(self, routine: Routine, run: RoutineRun, owner: ChatMessage | None) -> str:
+    def _routine_text(
+        self, routine: Routine, run: RoutineRun, owner: ChatMessage | None, placement: Placement
+    ) -> str:
         if owner is not None:
             trigger = f"The user asked for it in chat message {context.label(owner)}."
         elif routine.cron:
@@ -180,7 +176,7 @@ class Orchestrator:
             "Workers you start now are part of this run: each one's update lists the others, so you "
             "can wait for all of them and send the user one combined message. Only message the user "
             "now if there's already something to say (e.g. nothing needed doing).",
-            self._where_messages_go(owner),
+            self._where_messages_go(owner, placement),
             "</routine>",
         ])
 
@@ -211,12 +207,13 @@ class Orchestrator:
             owner = session.get(ChatMessage, owner_id) if owner_id is not None else None
             run_ids = {session.get(WorkerConversation, i).routine_run_id for i in conversation_ids}
 
-        messages = context.chat_history(self.engine, owner, HISTORY_TOKENS)
-        messages.append(Message(role="user", content=self._update_text(owner, run_id, conversation_ids)))
+        placement = update_placement(self.engine, owner)
+        messages = context.chat_history(self.engine, owner, HISTORY_TOKENS, threads=placement.choices)
+        messages.append(Message(role="user", content=self._update_text(owner, run_id, conversation_ids, placement)))
 
         runner = self._runner(
             owner_id=owner_id,
-            parent_id=update_parent(self.engine, owner),
+            placement=placement,
             # Follow-up workers join the run these updates came from.
             routine_run_id=next(iter(run_ids)) if len(run_ids) == 1 else None,
         )
@@ -229,7 +226,13 @@ class Orchestrator:
                 adopted |= {c.id for c in context.run_conversations(self.engine, run_id)}
             adopt(self.engine, runner.posted[0].id, adopted)
 
-    def _update_text(self, owner: ChatMessage | None, run_id: int | None, conversation_ids: Collection[int]) -> str:
+    def _update_text(
+        self,
+        owner: ChatMessage | None,
+        run_id: int | None,
+        conversation_ids: Collection[int],
+        placement: Placement,
+    ) -> str:
         with Session(self.engine) as session:
             conversations = [session.get(WorkerConversation, i) for i in conversation_ids]
             # Look the routine names up while the session is open.
@@ -264,7 +267,7 @@ class Orchestrator:
         else:
             parts.append("Nobody is waiting on this in the chat.")
 
-        parts.append(self._where_messages_go(owner))
+        parts.append(self._where_messages_go(owner, placement))
         parts.append(
             "If nothing needs saying yet (e.g. other conversations are still working on the "
             "same thing), end your turn without sending anything. You can also react by "
@@ -273,15 +276,27 @@ class Orchestrator:
         parts.append("</worker_update>")
         return "\n".join(parts)
 
-    def _where_messages_go(self, owner: ChatMessage | None) -> str:
+    def _where_messages_go(self, owner: ChatMessage | None, placement: Placement) -> str:
+        if placement.choices:
+            # Suggest the earliest thread with replies started at or after the request: that's
+            # usually where it was discussed (later ones tend to be about later things).
+            # Top-level if nobody has replied in any of them.
+            active = [root_id for root_id in placement.choices if context.thread_has_replies(self.engine, root_id)]
+            suggested = min(active) if active else None
+            return "\n".join([
+                "Where to post, with send_chat_message's reply_in:",
+                "- null: top-level",
+                *(f"- {root_id}: {context.describe_thread(self.engine, root_id)}" for root_id in placement.choices),
+                f"Use reply_in={'null' if suggested is None else suggested} unless it's clearly about "
+                "something else: it's where this work was last talked about, and starting a new "
+                "thread would split the conversation.",
+            ])
         if owner is None:
             return (
                 "If you send a message it will be posted top-level, and later updates about this "
                 "work will go in its thread."
             )
-        parent_id = update_parent(self.engine, owner)
-        where = f"in thread #{parent_id}" if parent_id is not None else "top-level, like your earlier reply"
-        return f"Messages you send with send_chat_message will go {where}."
+        return f"Messages you send with send_chat_message will go in thread #{placement.parent_id}."
 
     async def _run(self, messages: list[Message], runner: ToolRunner) -> str | None:
         """The tool-use loop. Returns the model's final text."""
