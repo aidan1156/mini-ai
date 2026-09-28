@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from mini.database.models import ChatMessage, Routine, RoutineRun, WorkerConversation
 from mini.llm import LLM, Message
-from mini.orchestrator import chat, context
+from mini.orchestrator import chat, context, routines
 from mini.orchestrator.owners import adopt, resolve_owner, update_parent
 from mini.orchestrator.tools import ToolRunner, run_tool
 
@@ -39,7 +39,6 @@ logger = logging.getLogger(__name__)
 
 HISTORY_TOKENS = 8000
 UPDATE_TRANSCRIPT_TOKENS = 3000
-RECENT_CONVERSATIONS = 10
 MAX_STEPS = 20  # LLM calls per orchestrator turn
 
 SYSTEM_PROMPT = """\
@@ -135,10 +134,10 @@ class Orchestrator:
     async def _run_routine(self, routine_id: int, owner_message_id: int | None) -> None:
         async with self._lock:
             with Session(self.engine, expire_on_commit=False) as session:
-                routine = session.get(Routine, routine_id)
+                routine = routines.get_routine(session, routine_id)
                 if routine is None:
                     return  # deleted since it was queued
-                run = RoutineRun(routine_id=routine.id, routine_name=routine.name)
+                run = RoutineRun(routine_id=routine.id)
                 session.add(run)
                 session.commit()
                 owner = session.get(ChatMessage, owner_message_id) if owner_message_id is not None else None
@@ -227,13 +226,17 @@ class Orchestrator:
     def _update_text(self, owner: ChatMessage | None, run_id: int | None, conversation_ids: Collection[int]) -> str:
         with Session(self.engine) as session:
             conversations = [session.get(WorkerConversation, i) for i in conversation_ids]
-            runs = {c.id: c.routine_run for c in conversations}
+            # Look the routine names up while the session is open.
+            started_by = {
+                c.id: f'run #{c.routine_run.id} of your routine "{c.routine_run.routine.name}"'
+                for c in conversations if c.routine_run is not None
+            }
 
         parts = ["<worker_update>", "This is an automatic update, not a message from the user.", ""]
         for conversation in conversations:
             parts.append(f"Conversation {context.describe(conversation)} finished a turn.")
-            if (run := runs[conversation.id]) is not None:
-                parts.append(f'It was started by run #{run.id} of your routine "{run.routine_name}".')
+            if conversation.id in started_by:
+                parts.append(f"It was started by {started_by[conversation.id]}.")
             parts += [
                 "Transcript (prompts sent and results):",
                 context.transcript(self.engine, conversation.id, UPDATE_TRANSCRIPT_TOKENS, types=("prompt", "result")),
@@ -280,7 +283,7 @@ class Orchestrator:
             now=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             projects_dir=self.projects_dir,
             projects=context.projects(self.projects_dir),
-            conversations=context.recent_conversations(self.engine, RECENT_CONVERSATIONS),
+            conversations=context.recent_conversations(self.engine),
         )
         tools = runner.tools()
 

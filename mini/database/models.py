@@ -108,6 +108,8 @@ class Routine(Base):
     enabled: Mapped[bool] = mapped_column(server_default="1")
     next_run_at: Mapped[datetime | None]  # UTC, like CURRENT_TIMESTAMP; None without a cron
     created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+    # Routines are soft-deleted, so their runs can always look them up.
+    deleted_at: Mapped[datetime | None]
 
 
 class RoutineRun(Base):
@@ -116,6 +118,7 @@ class RoutineRun(Base):
     __tablename__ = "routine_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    routine_id: Mapped[int | None] = mapped_column(ForeignKey("routines.id", ondelete="SET NULL"))
-    routine_name: Mapped[str]  # kept in case the routine is deleted
+    routine_id: Mapped[int] = mapped_column(ForeignKey("routines.id"))
     started_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+
+    routine: Mapped[Routine] = relationship()

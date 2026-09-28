@@ -30,6 +30,8 @@ RECONNECT_SECONDS = 5
 # A reply's parent is linked just after the API returns it, which can race with
 # the reply arriving on the event stream. Wait this long for the link to appear.
 PARENT_LINK_WAIT_SECONDS = 5
+# Show "typing" after the user's message until mini posts anything, or this long.
+TYPING_TIMEOUT_SECONDS = 60
 
 
 class MiniBot(discord.Client):
@@ -40,6 +42,9 @@ class MiniBot(discord.Client):
         self.engine = engine
         self.api = api
         self.channel_id = channel_id
+        # Set (and replaced with a fresh one) whenever mini posts, to stop every typing indicator.
+        self._posted = asyncio.Event()
+        self._typing_tasks: set[asyncio.Task] = set()
 
     async def setup_hook(self) -> None:
         self.loop.create_task(self._follow_events())
@@ -71,6 +76,18 @@ class MiniBot(discord.Client):
             return
         self._link(sent.id, message)
 
+        task = asyncio.create_task(self._type_until_posted(channel))
+        self._typing_tasks.add(task)
+        task.add_done_callback(self._typing_tasks.discard)
+
+    async def _type_until_posted(self, channel: discord.abc.Messageable) -> None:
+        posted = self._posted
+        async with channel.typing():
+            try:
+                await asyncio.wait_for(posted.wait(), TYPING_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+
     async def _follow_events(self) -> None:
         """Post mini's messages to Discord, reconnecting to the event stream as needed."""
         await self.wait_until_ready()
@@ -99,6 +116,9 @@ class MiniBot(discord.Client):
         for chunk in chunks[1:]:
             await channel.send(chunk)
         self._link(event.id, first)
+
+        self._posted.set()
+        self._posted = asyncio.Event()
 
     async def _thread_for(self, parent_id: int) -> discord.abc.Messageable:
         """The thread off the parent's Discord message, started if needed."""

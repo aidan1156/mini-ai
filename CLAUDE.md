@@ -41,6 +41,10 @@ starting a session / sending an existing one a task.
 - `mini/orchestrator/worker_updates.py` decides whether a worker's reply gets
   posted to the user's chat, either in the owner message's thread
   (`WorkerMessage.owner_message_id`) or as a new top-level message.
+- `mini/mcp_servers/` holds MCP servers that give workers extra tools (e.g.
+  `browser.py`, which hands tasks to a Browser Use cloud agent, capped at $1
+  a task). `worker_mcp_args()` returns the `claude` flags that load them,
+  passed on every turn since MCP config isn't saved with the session.
 - `database/database.db` is the SQLite database (`DATABASE_PATH`).
 - `old/` is the previous version of the project (Gemini-based), kept for
   reference only.

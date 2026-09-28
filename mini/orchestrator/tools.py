@@ -280,7 +280,9 @@ class ToolRunner:
 
     async def _list_routines(self) -> str:
         with Session(self.engine) as session:
-            rows = session.scalars(select(Routine).order_by(Routine.id)).all()
+            rows = session.scalars(
+                select(Routine).where(Routine.deleted_at.is_(None)).order_by(Routine.id)
+            ).all()
             return "\n\n".join(
                 f'#{r.id} "{r.name}", '
                 + (f"cron {r.cron!r}, next run {routines.local_time(r.next_run_at)}" if r.cron else "only when asked")
@@ -290,16 +292,16 @@ class ToolRunner:
 
     async def _delete_routine(self, routine_id: int) -> str:
         with Session(self.engine) as session:
-            routine = session.get(Routine, routine_id)
+            routine = routines.get_routine(session, routine_id)
             if routine is None:
                 return f"Error: no routine #{routine_id}"
-            session.delete(routine)
+            routine.deleted_at = routines.utc_now()  # soft delete: its runs still refer to it
             session.commit()
         return "Deleted."
 
     async def _run_routine(self, routine_id: int) -> str:
         with Session(self.engine) as session:
-            if session.get(Routine, routine_id) is None:
+            if routines.get_routine(session, routine_id) is None:
                 return f"Error: no routine #{routine_id}"
         # Asked for in the chat, so the run belongs to the current message like any other task.
         self.start_routine(routine_id, self.owner_id)

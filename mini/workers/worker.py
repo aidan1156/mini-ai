@@ -26,6 +26,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from mini.database.models import WorkerConversation, WorkerMessage
+from mini.mcp_servers import worker_mcp_args
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +180,7 @@ def _start_turn(
 
     args = [
         claude, "-p", "--output-format", "stream-json", "--verbose",
-        "--permission-mode", "auto", *session_args,
+        "--permission-mode", "auto", *worker_mcp_args(), *session_args,
     ]
     if model:
         args += ["--model", model]

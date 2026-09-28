@@ -38,6 +38,14 @@ def local_time(utc: datetime) -> str:
     return utc.replace(tzinfo=UTC).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def get_routine(session: Session, routine_id: int) -> Routine | None:
+    """The routine, or None if there's no such routine or it's been deleted."""
+    routine = session.get(Routine, routine_id)
+    if routine is None or routine.deleted_at is not None:
+        return None
+    return routine
+
+
 async def run_scheduler(engine: Engine, start: Callable[[int], None]) -> None:
     """Call `start(routine_id)` for each routine as it comes due, forever.
 
@@ -57,6 +65,7 @@ def _start_due(engine: Engine, start: Callable[[int], None]) -> None:
         due = session.scalars(
             select(Routine)
             .where(Routine.enabled)
+            .where(Routine.deleted_at.is_(None))
             .where(Routine.next_run_at.is_not(None))
             .where(Routine.next_run_at <= now)
         ).all()
