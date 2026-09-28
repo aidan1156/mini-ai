@@ -55,6 +55,10 @@ class MiniBot(discord.Client):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or not message.content:
             return
+        # Skip Discord's system messages, e.g. the "started a thread" notice (whose text
+        # is the thread's name).
+        if message.type not in (discord.MessageType.default, discord.MessageType.reply):
+            return
 
         channel = message.channel
         if isinstance(channel, discord.Thread):
@@ -165,10 +169,23 @@ class MiniBot(discord.Client):
             return session.get(DiscordMessage, chat_message_id)
 
     def _chat_id_for_thread(self, thread_id: int) -> int | None:
+        """The chat message a thread belongs to, or None if it isn't one of mini's."""
         with Session(self.engine) as session:
-            return session.scalar(
+            chat_message_id = session.scalar(
                 select(DiscordMessage.chat_message_id).where(DiscordMessage.thread_id == thread_id)
             )
+            if chat_message_id is not None:
+                return chat_message_id
+
+            # A thread the user started off a message has the same id as that message.
+            link = session.scalar(
+                select(DiscordMessage).where(DiscordMessage.discord_message_id == thread_id)
+            )
+            if link is None:
+                return None
+            link.thread_id = thread_id  # so mini's replies go in this thread too
+            session.commit()
+            return link.chat_message_id
 
     def _chat_content(self, chat_message_id: int) -> str:
         with Session(self.engine) as session:

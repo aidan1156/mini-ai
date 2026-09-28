@@ -12,6 +12,8 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.json"
 class Config:
     # Workers only run inside the repos in this folder, one repo per worker.
     projects_dir: Path
+    # Whether `python -m mini` starts the Discord bot alongside the API server.
+    discord: bool
 
 
 @cache
@@ -22,4 +24,4 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
     if not projects_dir.is_dir():
         raise RuntimeError(f"projects_dir in {path} isn't a directory: {projects_dir}")
 
-    return Config(projects_dir=projects_dir)
+    return Config(projects_dir=projects_dir, discord=raw.get("discord", True))
