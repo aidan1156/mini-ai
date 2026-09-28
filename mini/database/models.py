@@ -1,0 +1,79 @@
+from datetime import datetime
+
+from sqlalchemy import ForeignKey, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+# Each table must also be created by a migration in mini/database/migrations/
+# -- the models don't create tables themselves.
+
+
+class WorkerConversation(Base):
+    __tablename__ = "worker_conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(unique=True)
+    description: Mapped[str]
+    cwd: Mapped[str]  # Claude Code can only resume a session from the directory it started in
+    status: Mapped[str] = mapped_column(server_default="idle")  # 'running' | 'idle' | 'error'
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+    last_used: Mapped[datetime] = mapped_column(
+        server_default=func.current_timestamp(), onupdate=func.current_timestamp()
+    )
+
+    messages: Mapped[list["WorkerMessage"]] = relationship(
+        back_populates="conversation",
+        order_by="WorkerMessage.id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class WorkerMessage(Base):
+    __tablename__ = "worker_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("worker_conversations.id", ondelete="CASCADE")
+    )
+    type: Mapped[str]  # 'prompt' | 'assistant' | 'tool_result' | 'system' | 'result'
+    text: Mapped[str | None]
+    raw: Mapped[str] 
+    message_uuid: Mapped[str | None] = mapped_column(unique=True)
+    # The chat message this turn is acting on behalf of; replies to the user go in its thread.
+    owner_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+
+    conversation: Mapped[WorkerConversation] = relationship(back_populates="messages")
+    owner_message: Mapped["ChatMessage | None"] = relationship()
+
+
+class ChatMessage(Base):
+    """A message in the user's chat with the orchestrator agent."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    role: Mapped[str]  # 'user' | 'assistant'
+    content: Mapped[str]
+    # None for a top-level message; otherwise the message that started the thread.
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE")
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+
+    parent: Mapped["ChatMessage | None"] = relationship(
+        back_populates="replies", remote_side="ChatMessage.id"
+    )
+    replies: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="parent",
+        order_by="ChatMessage.id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
