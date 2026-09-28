@@ -20,6 +20,8 @@ class WorkerConversation(Base):
     description: Mapped[str]
     cwd: Mapped[str]  # Claude Code can only resume a session from the directory it started in
     status: Mapped[str] = mapped_column(server_default="idle")  # 'running' | 'idle' | 'error'
+    # The routine run that started this conversation, if any.
+    routine_run_id: Mapped[int | None] = mapped_column(ForeignKey("routine_runs.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
     last_used: Mapped[datetime] = mapped_column(
         server_default=func.current_timestamp(), onupdate=func.current_timestamp()
@@ -31,6 +33,7 @@ class WorkerConversation(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    routine_run: Mapped["RoutineRun | None"] = relationship()
 
 
 class WorkerMessage(Base):
@@ -91,3 +94,28 @@ class DiscordMessage(Base):
     channel_id: Mapped[int]  # the channel (or thread) the message is in
     thread_id: Mapped[int | None]  # the thread started from this message, once there is one
     created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+
+
+class Routine(Base):
+    """Instructions for the orchestrator, run on a timer or when asked (e.g. a morning brief)."""
+
+    __tablename__ = "routines"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str]
+    instructions: Mapped[str]  # for the orchestrator, not a worker
+    cron: Mapped[str | None]  # 5-field cron in the server's local time; None = only run when asked
+    enabled: Mapped[bool] = mapped_column(server_default="1")
+    next_run_at: Mapped[datetime | None]  # UTC, like CURRENT_TIMESTAMP; None without a cron
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+
+
+class RoutineRun(Base):
+    """One time a routine ran, so the workers it started can be grouped."""
+
+    __tablename__ = "routine_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    routine_id: Mapped[int | None] = mapped_column(ForeignKey("routines.id", ondelete="SET NULL"))
+    routine_name: Mapped[str]  # kept in case the routine is deleted
+    started_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())

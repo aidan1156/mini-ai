@@ -86,6 +86,15 @@ def projects(projects_dir: Path) -> str:
     return "\n".join(f"- {name}" for name in names) or "(none yet)"
 
 
+def project_path(projects_dir: Path, project: str) -> Path | None:
+    """The folder for `project`, or None unless it's a folder directly inside projects_dir."""
+    path = (projects_dir / project).resolve()
+    # No "..", absolute paths or nesting.
+    if path.parent != projects_dir or not path.is_dir():
+        return None
+    return path
+
+
 def recent_conversations(engine: Engine, n: int) -> str:
     """The `n` most recently used worker conversations, one per line."""
     with Session(engine) as session:
@@ -138,5 +147,15 @@ def owned_conversations(engine: Engine, owner_message_id: int) -> list[WorkerCon
                 select(WorkerMessage.conversation_id)
                 .where(WorkerMessage.owner_message_id == owner_message_id)
             ))
+            .order_by(WorkerConversation.id)
+        ))
+
+
+def run_conversations(engine: Engine, routine_run_id: int) -> list[WorkerConversation]:
+    """Conversations started by this routine run."""
+    with Session(engine) as session:
+        return list(session.scalars(
+            select(WorkerConversation)
+            .where(WorkerConversation.routine_run_id == routine_run_id)
             .order_by(WorkerConversation.id)
         ))

@@ -56,6 +56,7 @@ async def create_conversation(
     model: str | None = None,
     owner_message_id: int | None = None,
     on_turn_end: TurnEndHandler | None = None,
+    routine_run_id: int | None = None,
 ) -> int:
     """Start a new Claude Code session with `prompt`.
 
@@ -71,6 +72,7 @@ async def create_conversation(
             description=description,
             cwd=str(cwd),
             status="running",
+            routine_run_id=routine_run_id,
         )
         session.add(conversation)
         session.commit()

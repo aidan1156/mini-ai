@@ -10,6 +10,7 @@ Every request needs `Authorization: Bearer <MINI_API_TOKEN>`.
   `Last-Event-ID` header (or `?after=<id>`) to replay anything missed.
 """
 
+import asyncio
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -27,7 +28,7 @@ from mini.config import load_config
 from mini.database import init_db
 from mini.database.models import ChatMessage
 from mini.llm.openai_adapter import OpenAILLM
-from mini.orchestrator import chat
+from mini.orchestrator import chat, routines
 from mini.orchestrator.orchestrator import Orchestrator
 
 PAGE_SIZE = 20
@@ -50,9 +51,15 @@ def require_token(credentials: Annotated[HTTPAuthorizationCredentials | None, De
 async def lifespan(app: FastAPI):
     if not os.environ.get("MINI_API_TOKEN"):
         raise RuntimeError("Set MINI_API_TOKEN in .env")
+    projects_dir = load_config().projects_dir
     app.state.engine = init_db()
-    app.state.orchestrator = Orchestrator(app.state.engine, OpenAILLM(), load_config().projects_dir)
+    app.state.orchestrator = Orchestrator(app.state.engine, OpenAILLM(), projects_dir)
+
+    scheduler = asyncio.create_task(
+        routines.run_scheduler(app.state.engine, app.state.orchestrator.start_routine)
+    )
     yield
+    scheduler.cancel()
 
 
 app = FastAPI(title="mini", lifespan=lifespan, dependencies=[Depends(require_token)])
