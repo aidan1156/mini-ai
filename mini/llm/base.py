@@ -32,6 +32,9 @@ class Message:
     content: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)  # assistant only
     tool_call_id: str | None = None  # tool only: the call this is the result of
+    # Adapter-specific data to send back on later calls (e.g. the model's reasoning).
+    # Only the adapter that created the message reads it.
+    provider_data: Any = None
 
 
 class LLM(Protocol):

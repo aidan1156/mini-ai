@@ -77,3 +77,17 @@ class ChatMessage(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+
+class DiscordMessage(Base):
+    """Links a chat message to the Discord message showing it (used by mini/discord/)."""
+
+    __tablename__ = "discord_messages"
+
+    chat_message_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"), primary_key=True
+    )
+    discord_message_id: Mapped[int] = mapped_column(unique=True)
+    channel_id: Mapped[int]  # the channel (or thread) the message is in
+    thread_id: Mapped[int | None]  # the thread started from this message, once there is one
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())

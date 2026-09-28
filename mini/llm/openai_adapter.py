@@ -10,7 +10,13 @@ DEFAULT_MODEL = "gpt-5.6-luna"
 
 
 class OpenAILLM:
-    """OpenAI Chat Completions. Reads OPENAI_API_KEY (and OPENAI_MODEL) from the environment."""
+    """OpenAI Responses API. Reads OPENAI_API_KEY (and OPENAI_MODEL) from the environment.
+
+    Nothing is stored on OpenAI's side (`store=False`), so each call sends the
+    whole conversation. The model's reasoning comes back encrypted and is kept
+    on the assistant Message (`provider_data`) so it can be sent back on the
+    next call of a tool loop.
+    """
 
     def __init__(self, model: str | None = None, client: AsyncOpenAI | None = None):
         self.model = model or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
@@ -21,48 +27,62 @@ class OpenAILLM:
         if tools:
             kwargs["tools"] = [_to_openai_tool(t) for t in tools]
 
-        response = await self.client.chat.completions.create(
+        response = await self.client.responses.create(
             model=self.model,
-            messages=[{"role": "system", "content": system}, *map(_to_openai_message, messages)],
+            instructions=system,
+            input=[item for message in messages for item in _to_input_items(message)],
+            store=False,
+            include=["reasoning.encrypted_content"],
             **kwargs,
         )
-        return _from_openai_message(response.choices[0].message)
+        return _from_output(response.output)
 
 
 def _to_openai_tool(tool: Tool) -> dict[str, Any]:
     return {
         "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.parameters,
-        },
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.parameters,
     }
 
 
-def _to_openai_message(message: Message) -> dict[str, Any]:
+def _to_input_items(message: Message) -> list[dict[str, Any]]:
     if message.role == "tool":
-        return {"role": "tool", "tool_call_id": message.tool_call_id, "content": message.content or ""}
+        return [{"type": "function_call_output", "call_id": message.tool_call_id, "output": message.content or ""}]
 
-    result: dict[str, Any] = {"role": message.role, "content": message.content}
-    if message.tool_calls:
-        result["tool_calls"] = [
-            {
-                "id": call.id,
-                "type": "function",
-                "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
-            }
-            for call in message.tool_calls
-        ]
-    return result
+    if message.role == "assistant" and message.provider_data is not None:
+        return message.provider_data  # the original output items, reasoning included
+
+    items: list[dict[str, Any]] = []
+    if message.content:
+        items.append({"role": message.role, "content": message.content})
+    for call in message.tool_calls:
+        items.append({
+            "type": "function_call",
+            "call_id": call.id,
+            "name": call.name,
+            "arguments": json.dumps(call.arguments),
+        })
+    return items
 
 
-def _from_openai_message(message: Any) -> Message:
-    tool_calls = []
-    for call in message.tool_calls or []:
-        try:
-            arguments = json.loads(call.function.arguments or "{}")
-        except json.JSONDecodeError:
-            arguments = {}  # the tool will report the missing arguments back to the model
-        tool_calls.append(ToolCall(id=call.id, name=call.function.name, arguments=arguments))
-    return Message(role="assistant", content=message.content, tool_calls=tool_calls)
+def _from_output(output: list[Any]) -> Message:
+    texts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    for item in output:
+        if item.type == "message":
+            texts += [part.text for part in item.content if part.type == "output_text"]
+        elif item.type == "function_call":
+            try:
+                arguments = json.loads(item.arguments or "{}")
+            except json.JSONDecodeError:
+                arguments = {}  # the tool will report the missing arguments back to the model
+            tool_calls.append(ToolCall(id=item.call_id, name=item.name, arguments=arguments))
+
+    return Message(
+        role="assistant",
+        content="\n".join(texts) or None,
+        tool_calls=tool_calls,
+        provider_data=[item.model_dump(exclude_none=True) for item in output],
+    )

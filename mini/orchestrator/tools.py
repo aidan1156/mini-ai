@@ -37,6 +37,7 @@ class ToolRunner:
     """The tools for one orchestrator turn, and the state they share.
 
     `owner_id` is the chat message that worker prompts sent this turn work for.
+    New workers run in a repo directly inside `projects_dir`.
     send_chat_message posts with `parent_id`, or, if `thread_under` is given,
     the model can choose to start a thread under that message instead. Once
     it has posted, later messages this turn go in the same place.
@@ -46,12 +47,14 @@ class ToolRunner:
         self,
         engine: Engine,
         on_turn_end: TurnEndHandler,
+        projects_dir: Path,
         owner_id: int | None,
         parent_id: int | None,
         thread_under: int | None = None,
     ):
         self.engine = engine
         self.on_turn_end = on_turn_end
+        self.projects_dir = projects_dir
         self.owner_id = owner_id
         self.parent_id = parent_id
         self.thread_under = thread_under
@@ -63,17 +66,17 @@ class ToolRunner:
             Tool(
                 name="start_conversation",
                 description=(
-                    "Start a new Claude Code session to work on a task. It runs in the background; "
-                    "you'll get an update when it finishes its turn."
+                    "Start a new Claude Code session to work on a task in one of the projects. It runs "
+                    "in the background; you'll get an update when it finishes its turn."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "prompt": {"type": "string", "description": "The task, with all the context the session needs."},
                         "description": {"type": "string", "description": "A short summary of the work, used to find it later."},
-                        "cwd": {"type": "string", "description": "Absolute path of the project directory to work in."},
+                        "project": {"type": "string", "description": "The project (folder name) to work in."},
                     },
-                    "required": ["prompt", "description", "cwd"],
+                    "required": ["prompt", "description", "project"],
                 },
                 handler=self._start_conversation,
             ),
@@ -147,10 +150,11 @@ class ToolRunner:
             handler=self.send_chat_message,
         )
 
-    async def _start_conversation(self, prompt: str, description: str, cwd: str) -> str:
-        path = Path(cwd)
-        if not path.is_dir():
-            return f"Error: {cwd} is not a directory"
+    async def _start_conversation(self, prompt: str, description: str, project: str) -> str:
+        path = (self.projects_dir / project).resolve()
+        # Only folders directly inside projects_dir (no "..", absolute paths or nesting).
+        if path.parent != self.projects_dir or not path.is_dir():
+            return f"Error: no project called {project!r}"
         conversation_id = await worker.create_conversation(
             self.engine, prompt, description, path,
             owner_message_id=self.owner_id, on_turn_end=self.on_turn_end,

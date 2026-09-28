@@ -20,6 +20,7 @@ import datetime
 import logging
 from collections import defaultdict
 from collections.abc import Collection
+from pathlib import Path
 
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
@@ -55,30 +56,47 @@ The time is currently {now}.
   write these prefixes yourself.
 - Be brief.
 
+Projects you can start workers in (folders in {projects_dir}):
+{projects}
+
 Recently used worker conversations:
 {conversations}
 """
 
 
 class Orchestrator:
-    def __init__(self, engine: Engine, llm: LLM):
+    def __init__(self, engine: Engine, llm: LLM, projects_dir: Path):
         self.engine = engine
         self.llm = llm
+        self.projects_dir = projects_dir
         self._lock = asyncio.Lock()
         self._pending: set[int] = set()  # conversations with unhandled updates
         self._drain_task: asyncio.Task | None = None
+        # asyncio only keeps weak references to tasks, so hold on to replies in progress.
+        self._replies: set[asyncio.Task] = set()
 
-    async def handle_user_message(self, content: str, parent_id: int | None = None) -> list[ChatMessage]:
-        """Save the user's message, run the orchestrator, and return the messages it sent."""
+    def handle_user_message(self, content: str, parent_id: int | None = None) -> ChatMessage:
+        """Save the user's message and return it; the orchestrator replies in the background."""
         user_message = chat.send_message(self.engine, "user", content, parent_id)
 
+        task = asyncio.create_task(self._reply(user_message))
+        self._replies.add(task)
+        task.add_done_callback(self._reply_done)
+        return user_message
+
+    def _reply_done(self, task: asyncio.Task) -> None:
+        self._replies.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("Orchestrator failed to reply", exc_info=task.exception())
+
+    async def _reply(self, user_message: ChatMessage) -> None:
         async with self._lock:
             messages = context.chat_history(self.engine, user_message, HISTORY_TOKENS, exclude={user_message.id})
-            messages.append(Message(role="user", content=f"{context.label(user_message)} {content}"))
+            messages.append(Message(role="user", content=f"{context.label(user_message)} {user_message.content}"))
 
             # Reply next to the user's message, or (if it's top-level) optionally in a thread under it.
             runner = ToolRunner(
-                self.engine, self.on_worker_turn_end, owner_id=user_message.id,
+                self.engine, self.on_worker_turn_end, self.projects_dir, owner_id=user_message.id,
                 parent_id=user_message.parent_id,
                 thread_under=user_message.id if user_message.parent_id is None else None,
             )
@@ -87,8 +105,6 @@ class Orchestrator:
             # If it answered in plain text instead of using the tool, send that.
             if final_text and not runner.posted:
                 await runner.send_chat_message(final_text)
-
-        return runner.posted
 
     async def on_worker_turn_end(self, conversation_id: int) -> None:
         """Pass to workers as `on_turn_end`. Queues the update and returns straight away."""
@@ -120,7 +136,7 @@ class Orchestrator:
         messages.append(Message(role="user", content=self._update_text(owner, conversation_ids)))
 
         runner = ToolRunner(
-            self.engine, self.on_worker_turn_end, owner_id=owner_id,
+            self.engine, self.on_worker_turn_end, self.projects_dir, owner_id=owner_id,
             parent_id=update_parent(self.engine, owner),
         )
         await self._run(messages, runner)  # plain final text is ignored: saying nothing is allowed
@@ -167,7 +183,12 @@ class Orchestrator:
 
     async def _run(self, messages: list[Message], runner: ToolRunner) -> str | None:
         """The tool-use loop. Returns the model's final text."""
-        system = SYSTEM_PROMPT.format(now=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), conversations=context.recent_conversations(self.engine, RECENT_CONVERSATIONS))
+        system = SYSTEM_PROMPT.format(
+            now=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            projects_dir=self.projects_dir,
+            projects=context.projects(self.projects_dir),
+            conversations=context.recent_conversations(self.engine, RECENT_CONVERSATIONS),
+        )
         tools = runner.tools()
 
         for _ in range(MAX_STEPS):

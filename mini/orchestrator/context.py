@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Collection
+from pathlib import Path
 
 from sqlalchemy import Engine, or_, select
 from sqlalchemy.orm import Session
@@ -74,6 +75,15 @@ def label(message: ChatMessage) -> str:
 def strip_label(text: str) -> str:
     """Remove a leading [#id] prefix, in case the model copies the format anyway."""
     return LEADING_LABEL.sub("", text, count=1)
+
+
+def projects(projects_dir: Path) -> str:
+    """The project folders workers can run in, one per line."""
+    names = sorted(
+        (p.name for p in projects_dir.iterdir() if p.is_dir() and not p.name.startswith(".")),
+        key=str.lower,
+    )
+    return "\n".join(f"- {name}" for name in names) or "(none yet)"
 
 
 def recent_conversations(engine: Engine, n: int) -> str:
