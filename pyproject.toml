@@ -19,3 +19,6 @@ dependencies = [
 	"sqlalchemy>=2.0.50",
 	"uvicorn>=0.35.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
