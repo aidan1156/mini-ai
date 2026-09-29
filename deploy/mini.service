@@ -1,0 +1,24 @@
+# Installed as /etc/systemd/system/mini.service. Runs the API server and the
+# Discord bot (python -m mini); workers are child processes of the API server.
+[Unit]
+Description=mini (API server + Discord bot)
+After=network-online.target
+Wants=network-online.target
+# Don't start (or crash-loop) until the secrets are in place.
+ConditionPathExists=/srv/mini-ai/.env
+
+[Service]
+User=ubuntu
+WorkingDirectory=/srv/mini-ai
+Environment=MINI_CONFIG=/srv/mini-config.json
+# ~/.local/bin for uv (and claude, if installed there).
+Environment=PATH=/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/ubuntu/.local/bin/uv run --frozen python -m mini
+Restart=always
+RestartSec=5
+# Stop like Ctrl+C, which mini's launcher handles cleanly.
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

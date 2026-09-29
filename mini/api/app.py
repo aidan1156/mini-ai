@@ -30,6 +30,7 @@ from mini.database.models import ChatMessage
 from mini.llm.openai_adapter import OpenAILLM
 from mini.orchestrator import chat, routines
 from mini.orchestrator.orchestrator import Orchestrator
+from mini.workers import worker
 
 PAGE_SIZE = 20
 
@@ -53,6 +54,8 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("Set MINI_API_TOKEN in .env")
     projects_dir = load_config().projects_dir
     app.state.engine = init_db()
+    # Workers run inside this process, so any still marked running were cut off by a restart.
+    worker.mark_interrupted(app.state.engine)
     app.state.orchestrator = Orchestrator(app.state.engine, OpenAILLM(), projects_dir)
 
     scheduler = asyncio.create_task(

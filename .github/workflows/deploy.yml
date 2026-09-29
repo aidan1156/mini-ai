@@ -1,0 +1,40 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The deploy runs on the server (and may wait for running workers), so let
+# deploys queue rather than cancelling one this runner can no longer supervise.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      # The key is pinned to /usr/local/bin/deploy-mini by a forced command in
+      # authorized_keys, so it cannot do anything but deploy.
+      - name: Update and restart on the server
+        run: |
+          ssh -i ~/.ssh/id_ed25519 \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+
+      # Every endpoint needs the token, so a 401 means the API is up and answering.
+      - name: Verify the API is up
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 3 https://miniapi.aidanba.com/messages)
+          echo "https://miniapi.aidanba.com/messages -> $code"
+          test "$code" = "401"

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Update mini from git and restart it. Installed as /usr/local/bin/deploy-mini and
+# invoked over SSH by GitHub Actions as a forced command, so keep the env explicit.
+# Migrations run when mini starts back up (init_db applies pending ones).
+set -euo pipefail
+
+export PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/home/ubuntu
+
+REPO=/srv/mini-ai
+LOCK=/var/lock/deploy-mini.lock
+LOG=/var/log/deploy-mini.log
+# Restarting stops running workers mid-turn, so wait up to this long for them to finish.
+IDLE_WAIT_SECONDS=600
+
+# Serialise deploys: a second push waits rather than racing the first.
+exec 9>"$LOCK"
+flock 9
+
+exec > >(tee -a "$LOG") 2>&1
+echo "=== deploy $(date -Is) ==="
+
+cd "$REPO"
+git fetch --prune origin
+REF=origin/main
+echo "--> deploying $REF ($(git rev-parse --short "$REF"))"
+git reset --hard "$REF"
+git clean -fd  # not -x: keeps ignored files (.env, database/, .venv)
+
+uv sync --frozen
+
+if [ ! -f .env ]; then
+    echo "--> no .env yet, so not starting mini (the service waits for it too)"
+    echo "=== ok, code updated $(date -Is) ==="
+    exit 0
+fi
+
+running_workers() {
+    python3 - <<'EOF' 2>/dev/null || echo 0
+import sqlite3
+db = sqlite3.connect("file:database/database.db?mode=ro", uri=True)
+print(db.execute("SELECT COUNT(*) FROM worker_conversations WHERE status = 'running'").fetchone()[0])
+EOF
+}
+
+waited=0
+while (( $(running_workers) > 0 && waited < IDLE_WAIT_SECONDS )); do
+    echo "--> waiting for $(running_workers) running worker(s) to finish (${waited}s so far)"
+    sleep 15
+    waited=$((waited + 15))
+done
+
+sudo systemctl restart mini
+sleep 5
+systemctl is-active --quiet mini || { echo "!!! mini isn't running after restart"; journalctl -u mini -n 30 --no-pager; exit 1; }
+echo "=== ok $(date -Is) ==="

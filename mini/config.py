@@ -1,11 +1,15 @@
-"""Settings from config.json at the repo root (secrets live in .env instead)."""
+"""Settings from config.json at the repo root (secrets live in .env instead).
+
+Set MINI_CONFIG to use a different file, e.g. on the server, where the paths differ.
+"""
 
 import json
+import os
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.json"
+CONFIG_PATH = Path(os.environ.get("MINI_CONFIG") or Path(__file__).resolve().parents[1] / "config.json")
 
 
 @dataclass(frozen=True)

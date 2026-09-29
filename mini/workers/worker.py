@@ -153,6 +153,25 @@ def get_recent_messages(
     return messages
 
 
+def mark_interrupted(engine: Engine) -> int:
+    """Mark conversations left 'running' by an earlier process as 'error'.
+
+    Call once at startup: a turn can't survive a restart, and a conversation
+    stuck in 'running' could never be sent another message. Returns how many
+    were marked.
+    """
+    with Session(engine) as session:
+        marked = session.execute(
+            update(WorkerConversation)
+            .where(WorkerConversation.status == "running")
+            .values(status="error")
+        ).rowcount
+        session.commit()
+    if marked:
+        logger.warning("Marked %s conversation(s) interrupted by a restart as 'error'", marked)
+    return marked
+
+
 def _find_claude() -> str:
     claude = shutil.which("claude")
     if claude is None:
