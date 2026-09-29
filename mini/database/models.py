@@ -80,6 +80,26 @@ class ChatMessage(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    # Loaded with the message, so they're there after its session closes.
+    attachments: Mapped[list["Attachment"]] = relationship(
+        order_by="Attachment.id", lazy="selectin", passive_deletes=True
+    )
+
+
+class Attachment(Base):
+    """A file sent with a chat message, stored at data/attachments/<id>/<filename>."""
+
+    __tablename__ = "attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # None between uploading the file and sending the message it's attached to.
+    chat_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE")
+    )
+    filename: Mapped[str]
+    content_type: Mapped[str]
+    size: Mapped[int]  # bytes
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
 
 
 class DiscordMessage(Base):

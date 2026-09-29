@@ -58,6 +58,11 @@ The time is currently {now}.
   project for general tasks that aren't about one repo, or when you're not sure which
   repo; it then starts in the projects folder and can cd into any of them.
 - The user only sees what you send with send_chat_message.
+- The user can attach files (images, logs, documents): you'll see
+  "[attached: name (type, size) at <path>]". You can't open them yourself, but
+  workers can, so put the paths in the worker's prompt. To send the user a file
+  (e.g. a screenshot a worker took), ask the worker for its path and pass it in
+  send_chat_message's attachments.
 - When send_chat_message offers reply_in, choose where to post: null (top-level,
   inline) for quick answers and small tasks, or a message's id to post in the
   thread under it, e.g. for bigger work with several updates to come. For updates
@@ -87,9 +92,14 @@ class Orchestrator:
         # asyncio only keeps weak references to tasks, so hold on to turns in progress.
         self._tasks: set[asyncio.Task] = set()
 
-    def handle_user_message(self, content: str, parent_id: int | None = None) -> ChatMessage:
-        """Save the user's message and return it; the orchestrator replies in the background."""
-        user_message = chat.send_message(self.engine, "user", content, parent_id)
+    def handle_user_message(
+        self, content: str, parent_id: int | None = None, attachment_ids: Collection[int] = ()
+    ) -> ChatMessage:
+        """Save the user's message and return it; the orchestrator replies in the background.
+
+        Raises AttachmentError if any of `attachment_ids` can't be attached.
+        """
+        user_message = chat.send_message(self.engine, "user", content, parent_id, attachment_ids)
         self._in_background(self._reply(user_message))
         return user_message
 
@@ -124,7 +134,7 @@ class Orchestrator:
     async def _reply(self, user_message: ChatMessage) -> None:
         async with self._lock:
             messages = context.chat_history(self.engine, user_message, HISTORY_TOKENS, exclude={user_message.id})
-            messages.append(Message(role="user", content=f"{context.label(user_message)} {user_message.content}"))
+            messages.append(context.render(user_message))
 
             # Reply next to the user's message, or (if it's top-level) optionally in a thread under it.
             runner = self._runner(owner_id=user_message.id, placement=reply_placement(user_message))

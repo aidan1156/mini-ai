@@ -9,6 +9,7 @@ from croniter import croniter
 from sqlalchemy import Engine, select, update
 from sqlalchemy.orm import Session
 
+from mini import attachments as attachment_store
 from mini.database.models import ChatMessage, Routine, WorkerConversation
 from mini.llm import Tool, ToolCall
 from mini.orchestrator import chat, context, routines
@@ -199,7 +200,20 @@ class ToolRunner:
         ]
 
     def _send_chat_message_tool(self) -> Tool:
-        properties: dict[str, Any] = {"content": {"type": "string"}}
+        properties: dict[str, Any] = {
+            "content": {"type": "string"},
+            "attachments": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Absolute paths of files to send with the message, e.g. a screenshot or report a "
+                    "worker made (ask it for the path). They must be inside the projects folder or be "
+                    f"attachments from the chat, not hidden files, and at most "
+                    f"{attachment_store.MAX_SIZE // (1024 * 1024)} MB each."
+                ),
+            },
+        }
+        required = ["content"]
         if choices := self.placement.choices:
             properties["reply_in"] = {
                 "type": ["integer", "null"],
@@ -210,10 +224,11 @@ class ToolRunner:
                     "Later updates about this work can go there too."
                 ),
             }
+            required.append("reply_in")
         return Tool(
             name="send_chat_message",
             description="Send the user a message in the chat. This is the only way the user sees anything you say.",
-            parameters={"type": "object", "properties": properties, "required": list(properties)},
+            parameters={"type": "object", "properties": properties, "required": required},
             handler=self.send_chat_message,
         )
 
@@ -315,7 +330,9 @@ class ToolRunner:
         self.start_routine(routine_id, self.owner_id)
         return "The routine will run once this turn ends."
 
-    async def send_chat_message(self, content: str, reply_in: int | None = None) -> str:
+    async def send_chat_message(
+        self, content: str, reply_in: int | None = None, attachments: list[str] | None = None
+    ) -> str:
         if self.placement.choices:
             if reply_in is not None and reply_in not in self.placement.choices:
                 return f"Error: reply_in must be null or one of {self.placement.choices}"
@@ -323,7 +340,21 @@ class ToolRunner:
         else:
             parent_id = self.placement.parent_id  # no choice: reply_in is ignored
 
-        message = chat.send_message(self.engine, "assistant", context.strip_label(content), parent_id)
+        # Check every file before sending anything.
+        files = []
+        for raw_path in attachments or []:
+            file = self._sendable_file(raw_path)
+            if isinstance(file, str):
+                return f"Error: {file}"
+            files.append(file)
+        try:
+            attachment_ids = [attachment_store.save_file(self.engine, file).id for file in files]
+        except attachment_store.AttachmentError as e:
+            return f"Error: {e}"
+
+        message = chat.send_message(
+            self.engine, "assistant", context.strip_label(content), parent_id, attachment_ids
+        )
         self.posted.append(message)
         # Later messages this turn go in the same place.
         self.placement = Placement(parent_id=parent_id)
@@ -334,3 +365,18 @@ class ToolRunner:
             self.owner_id = message.id
             self.placement = Placement(parent_id=message.id)
         return "Sent."
+
+    def _sendable_file(self, raw_path: str) -> Path | str:
+        """The file at `raw_path` if it's OK to send to the user, else why not."""
+        file = Path(raw_path).resolve()
+        # Only files from the projects or the chat's own attachments, never e.g. .env or ~/.ssh.
+        for root in (self.projects_dir, attachment_store.ATTACHMENTS_DIR.resolve()):
+            if file.is_relative_to(root):
+                if any(part.startswith(".") for part in file.relative_to(root).parts):
+                    return f"{raw_path} is a hidden file (or in a hidden folder), which can't be sent"
+                break
+        else:
+            return f"{raw_path} isn't in the projects folder or the chat's attachments"
+        if not file.is_file():
+            return f"no file at {raw_path}"
+        return file

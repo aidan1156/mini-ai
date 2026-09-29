@@ -4,6 +4,9 @@ Every request needs `Authorization: Bearer <MINI_API_TOKEN>`.
 
 - POST /messages: send the orchestrator a message. Returns the saved message
   straight away; replies arrive later on the event stream.
+- POST /attachments: upload a file (multipart, field `file`) to send with a
+  message: pass the returned id in the message's `attachment_ids`.
+- GET /attachments/{id}: download a file sent with a message.
 - GET /messages?page=N: the chat, newest first, 20 messages a page.
 - GET /events: a Server-Sent Events stream of every new chat message (the
   user's and mini's). Each event's id is the message id: reconnect with a
@@ -17,13 +20,15 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from mini.api.public_models import ChatMessageOut, MessagePage, SendMessageIn
+from mini import attachments
+from mini.api.public_models import AttachmentOut, ChatMessageOut, MessagePage, SendMessageIn
 from mini.config import load_config
 from mini.database import init_db
 from mini.database.models import ChatMessage
@@ -80,8 +85,33 @@ async def send_message(body: SendMessageIn, request: Request) -> ChatMessageOut:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"No message {parent_id}")
             parent_id = parent.parent_id or parent.id  # threads are one level deep
 
-    message = request.app.state.orchestrator.handle_user_message(body.content, parent_id)
+    try:
+        message = request.app.state.orchestrator.handle_user_message(
+            body.content, parent_id, body.attachment_ids
+        )
+    except attachments.AttachmentError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return ChatMessageOut.model_validate(message)
+
+
+@app.post("/attachments", status_code=status.HTTP_201_CREATED)
+async def upload_attachment(file: UploadFile, request: Request) -> AttachmentOut:
+    data = await file.read(attachments.MAX_SIZE + 1)  # one byte over is enough to know it's too big
+    try:
+        attachment = attachments.save(request.app.state.engine, file.filename or "file", file.content_type, data)
+    except attachments.AttachmentError as e:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, str(e))
+    return AttachmentOut.model_validate(attachment)
+
+
+@app.get("/attachments/{attachment_id}")
+def download_attachment(attachment_id: int, request: Request) -> FileResponse:
+    attachment = attachments.get(request.app.state.engine, attachment_id)
+    if attachment is None or not attachments.path(attachment).is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No attachment {attachment_id}")
+    return FileResponse(
+        attachments.path(attachment), media_type=attachment.content_type, filename=attachment.filename
+    )
 
 
 @app.get("/messages")

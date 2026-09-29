@@ -6,6 +6,7 @@ from collections.abc import Collection
 from sqlalchemy import Engine, or_, select
 from sqlalchemy.orm import Session
 
+from mini import attachments
 from mini.database.models import ChatMessage, WorkerConversation, WorkerMessage
 from mini.llm import Message
 from mini.orchestrator.context.conversations import describe
@@ -68,13 +69,26 @@ def chat_history(
 
     # Oldest first, with each thread's replies straight after the message that started it.
     ordered = sorted(picked.values(), key=lambda m: (m.parent_id or m.id, m.id))
-    messages = [
-        Message(role=m.role, content=f"{label(m)} {m.content}" if m.role == "user" else m.content)
-        for m in ordered
-    ]
+    messages = [render(m) for m in ordered]
     if note := _linked_workers_note(engine, picked):
         messages.append(Message(role="user", content=note))
     return messages
+
+
+def render(message: ChatMessage) -> Message:
+    """A chat message as the orchestrator sees it, with any attachments listed.
+
+    The user's messages get a [#id] prefix and their attachments' paths (so they
+    can be handed to workers); the orchestrator's own just name what it sent.
+    """
+    if message.role == "user":
+        lines = [f"{label(message)} {message.content}".rstrip()]
+        lines += [f"[attached: {attachments.describe(a)}]" for a in message.attachments]
+    else:
+        lines = [message.content]
+        if message.attachments:
+            lines.append(f"(sent with: {', '.join(a.filename for a in message.attachments)})")
+    return Message(role=message.role, content="\n".join(lines))
 
 
 def _linked_workers_note(engine: Engine, messages: dict[int, ChatMessage]) -> str | None:

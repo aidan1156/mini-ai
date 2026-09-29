@@ -25,6 +25,7 @@ from sqlalchemy import Engine, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
+from mini.attachments import ATTACHMENTS_DIR
 from mini.database.models import WorkerConversation, WorkerMessage
 from mini.mcp_servers import worker_mcp_args
 
@@ -197,9 +198,12 @@ def _start_turn(
         {"type": "user", "content": prompt}, None, owner_message_id,
     )
 
+    # Let workers read the chat's attachments (the orchestrator hands them over by path).
+    ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
     args = [
         claude, "-p", "--output-format", "stream-json", "--verbose",
-        "--permission-mode", "auto", *worker_mcp_args(), *session_args,
+        "--permission-mode", "auto", "--add-dir", str(ATTACHMENTS_DIR),
+        *worker_mcp_args(), *session_args,
     ]
     if model:
         args += ["--model", model]

@@ -7,6 +7,7 @@ from mini.orchestrator.context.chat_history import (
     chat_history,
     describe_thread,
     label,
+    render,
     strip_label,
     thread_has_replies,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "project_path",
     "projects",
     "recent_conversations",
+    "render",
     "run_conversations",
     "strip_label",
     "thread_has_replies",

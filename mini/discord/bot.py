@@ -8,9 +8,13 @@
 
 User messages on the event stream are skipped: the ones sent from Discord are
 already there, and ones sent from other clients aren't mirrored.
+
+Files go both ways: ones attached in Discord are uploaded to mini with the
+message, and ones on mini's messages are posted as Discord attachments.
 """
 
 import asyncio
+import io
 import logging
 
 import aiohttp
@@ -19,6 +23,7 @@ from sqlalchemy import Engine, func, select, update
 from sqlalchemy.orm import Session
 
 from mini.api.public_models import ChatMessageOut
+from mini.attachments import MAX_SIZE
 from mini.database.models import ChatMessage, DiscordMessage
 from mini.discord.api_client import MiniClient
 
@@ -32,6 +37,7 @@ RECONNECT_SECONDS = 5
 PARENT_LINK_WAIT_SECONDS = 5
 # Show "typing" after the user's message until mini posts anything, or this long.
 TYPING_TIMEOUT_SECONDS = 60
+FILES_PER_MESSAGE = 10  # Discord's limit
 
 
 class MiniBot(discord.Client):
@@ -53,7 +59,7 @@ class MiniBot(discord.Client):
         logger.info("Discord bot online as %s", self.user)
 
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or not message.content:
+        if message.author.bot or not (message.content or message.attachments):
             return
         # Skip Discord's system messages, e.g. the "started a thread" notice (whose text
         # is the thread's name).
@@ -73,7 +79,10 @@ class MiniBot(discord.Client):
             return
 
         try:
-            sent = await self.api.send_message(message.content, parent_id)
+            attachment_ids = await self._upload_attachments(message)
+            if not message.content and not attachment_ids:
+                return  # only files, and none could be sent (already flagged)
+            sent = await self.api.send_message(message.content, parent_id, attachment_ids)
         except aiohttp.ClientError:
             logger.exception("Couldn't send message to mini")
             await message.add_reaction("⚠️")
@@ -83,6 +92,20 @@ class MiniBot(discord.Client):
         task = asyncio.create_task(self._type_until_posted(channel))
         self._typing_tasks.add(task)
         task.add_done_callback(self._typing_tasks.discard)
+
+    async def _upload_attachments(self, message: discord.Message) -> list[int]:
+        """Upload the message's files to mini, returning their ids. Too-big ones get a ⚠️."""
+        ids = []
+        for attachment in message.attachments:
+            if attachment.size > MAX_SIZE:
+                logger.warning("Skipping %s: %s bytes is over mini's limit", attachment.filename, attachment.size)
+                await message.add_reaction("⚠️")
+                continue
+            uploaded = await self.api.upload_attachment(
+                attachment.filename, attachment.content_type, await attachment.read()
+            )
+            ids.append(uploaded.id)
+        return ids
 
     async def _type_until_posted(self, channel: discord.abc.Messageable) -> None:
         posted = self._posted
@@ -115,14 +138,42 @@ class MiniBot(discord.Client):
         else:
             channel = await self._thread_for(event.parent_id)
 
-        chunks = _split(event.content)
-        first = await channel.send(chunks[0])
-        for chunk in chunks[1:]:
-            await channel.send(chunk)
+        files, too_big = await self._download_attachments(event, channel)
+        content = event.content
+        if too_big:
+            content += f"\n\n(Too big to post on Discord: {', '.join(too_big)})"
+
+        # The text (split to fit), with the files on the last part, 10 to a message.
+        sends: list[dict] = [{"content": chunk} for chunk in _split(content)] if content.strip() else []
+        batches = [files[i:i + FILES_PER_MESSAGE] for i in range(0, len(files), FILES_PER_MESSAGE)]
+        if batches and sends:
+            sends[-1]["files"] = batches.pop(0)
+        sends += [{"files": batch} for batch in batches]
+        if not sends:
+            return  # nothing that can be shown
+
+        first = await channel.send(**sends[0])
+        for kwargs in sends[1:]:
+            await channel.send(**kwargs)
         self._link(event.id, first)
 
         self._posted.set()
         self._posted = asyncio.Event()
+
+    async def _download_attachments(
+        self, event: ChatMessageOut, channel: discord.abc.Messageable
+    ) -> tuple[list[discord.File], list[str]]:
+        """The event's files as Discord files, and the names of any too big to upload here."""
+        guild = getattr(channel, "guild", None)
+        limit = guild.filesize_limit if guild is not None else 10 * 1024 * 1024
+        files, too_big = [], []
+        for attachment in event.attachments:
+            if attachment.size > limit:
+                too_big.append(attachment.filename)
+                continue
+            data = await self.api.download_attachment(attachment.id)
+            files.append(discord.File(io.BytesIO(data), filename=attachment.filename))
+        return files, too_big
 
     async def _thread_for(self, parent_id: int) -> discord.abc.Messageable:
         """The thread off the parent's Discord message, started if needed."""

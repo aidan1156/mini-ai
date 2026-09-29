@@ -1297,6 +1297,7 @@ dependencies = [
     { name = "langchain-google-genai" },
     { name = "mcp" },
     { name = "openai" },
+    { name = "python-multipart" },
     { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
@@ -1313,6 +1314,7 @@ requires-dist = [
     { name = "langchain-google-genai", specifier = ">=4.2.4" },
     { name = "mcp", specifier = ">=1.27.2" },
     { name = "openai", specifier = ">=2.38.0" },
+    { name = "python-multipart", specifier = ">=0.0.29" },
     { name = "sqlalchemy", specifier = ">=2.0.50" },
     { name = "uvicorn", specifier = ">=0.35.0" },
 ]
