@@ -13,6 +13,24 @@ LOG=/var/log/deploy-mini.log
 # Restarting stops running workers mid-turn, so wait up to this long for them to finish.
 IDLE_WAIT_SECONDS=600
 
+# How many workers are mid-turn, according to the database at $1.
+running_workers() {
+    python3 - "$1" <<'EOF' 2>/dev/null || echo 0
+import sqlite3, sys
+db = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+print(db.execute("SELECT COUNT(*) FROM worker_conversations WHERE status = 'running'").fetchone()[0])
+EOF
+}
+
+wait_for_workers() {
+    local waited=0
+    while (( $(running_workers "$1") > 0 && waited < IDLE_WAIT_SECONDS )); do
+        echo "--> waiting for $(running_workers "$1") running worker(s) to finish (${waited}s so far)"
+        sleep 15
+        waited=$((waited + 15))
+    done
+}
+
 # Serialise deploys: a second push waits rather than racing the first.
 exec 9>"$LOCK"
 flock 9
@@ -22,10 +40,23 @@ echo "=== deploy $(date -Is) ==="
 
 cd "$REPO"
 git fetch --prune origin
+
+# One-off: the database moved from database/ to data/. Move it before the reset and
+# clean below, which would otherwise delete database/ once it's no longer ignored.
+# Remove this block once the server has been deployed with data/.
+if [ -f database/database.db ] && [ ! -e data/database.db ]; then
+    echo "--> moving database/database.db to data/"
+    wait_for_workers database/database.db
+    sudo systemctl stop mini
+    mkdir -p data
+    mv database/database.db data/database.db
+    rmdir database 2>/dev/null || true
+fi
+
 REF=origin/main
 echo "--> deploying $REF ($(git rev-parse --short "$REF"))"
 git reset --hard "$REF"
-git clean -fd  # not -x: keeps ignored files (.env, database/, .venv)
+git clean -fd  # not -x: keeps ignored files (.env, data/, .venv)
 
 uv sync --frozen
 
@@ -35,20 +66,7 @@ if [ ! -f .env ]; then
     exit 0
 fi
 
-running_workers() {
-    python3 - <<'EOF' 2>/dev/null || echo 0
-import sqlite3
-db = sqlite3.connect("file:database/database.db?mode=ro", uri=True)
-print(db.execute("SELECT COUNT(*) FROM worker_conversations WHERE status = 'running'").fetchone()[0])
-EOF
-}
-
-waited=0
-while (( $(running_workers) > 0 && waited < IDLE_WAIT_SECONDS )); do
-    echo "--> waiting for $(running_workers) running worker(s) to finish (${waited}s so far)"
-    sleep 15
-    waited=$((waited + 15))
-done
+wait_for_workers data/database.db
 
 sudo systemctl restart mini
 sleep 5

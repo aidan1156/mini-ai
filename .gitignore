@@ -1,4 +1,6 @@
 __pycache__/
 .env
+/data/
+# Old location of data/, kept ignored until every copy has moved (deploy-mini moves it on the server).
 /database/
 old/

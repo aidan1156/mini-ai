@@ -45,7 +45,8 @@ starting a session / sending an existing one a task.
   `browser.py`, which hands tasks to a Browser Use cloud agent, capped at $1
   a task). `worker_mcp_args()` returns the `claude` flags that load them,
   passed on every turn since MCP config isn't saved with the session.
-- `database/database.db` is the SQLite database (`DATABASE_PATH`).
+- `data/` holds everything mini stores (git-ignored): `data/database.db` is the
+  SQLite database (`DATABASE_PATH`).
 - `old/` is the previous version of the project (Gemini-based), kept for
   reference only.
 
