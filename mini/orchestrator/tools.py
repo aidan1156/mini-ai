@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 READ_TOKENS = 4000
 SEARCH_LIMIT = 20
+CHAT_SEARCH_LIMIT = 10  # default for search_chat
+MAX_CHAT_SEARCH_LIMIT = 50
 
 async def run_tool(tools: list[Tool], call: ToolCall) -> str:
     """Run the tool the model asked for, returning its result (or error) for the model."""
@@ -141,6 +143,29 @@ class ToolRunner:
                     "required": ["query"],
                 },
                 handler=self._search_conversations,
+            ),
+            Tool(
+                name="search_chat",
+                description=(
+                    "Search this chat (the user's messages and yours, in every thread) for some text, "
+                    "e.g. to find something said earlier that's no longer in view. Returns the most "
+                    "recent matches, newest first."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "Text to look for, ignoring case."},
+                        "limit": {
+                            "type": ["integer", "null"],
+                            "description": (
+                                f"At most this many matches (default {CHAT_SEARCH_LIMIT}, "
+                                f"up to {MAX_CHAT_SEARCH_LIMIT})."
+                            ),
+                        },
+                    },
+                    "required": ["text"],
+                },
+                handler=self._search_chat,
             ),
             Tool(
                 name="create_routine",
@@ -284,6 +309,13 @@ class ToolRunner:
         with Session(self.engine) as session:
             conversations = session.scalars(statement).all()
         return "\n".join(context.describe(c) for c in conversations) or "No matches."
+
+    async def _search_chat(self, text: str, limit: int | None = None) -> str:
+        if not text.strip():
+            return "Error: text is empty"
+        limit = min(max(limit or CHAT_SEARCH_LIMIT, 1), MAX_CHAT_SEARCH_LIMIT)
+        messages = context.search_chat(self.engine, text, limit)
+        return "\n\n".join(context.describe_match(m) for m in messages) or "No matches."
 
     async def _create_routine(self, name: str, instructions: str, cron: str | None) -> str:
         if cron is not None and not croniter.is_valid(cron):

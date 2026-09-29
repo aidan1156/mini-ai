@@ -118,6 +118,23 @@ def _linked_workers_note(engine: Engine, messages: dict[int, ChatMessage]) -> st
     ])
 
 
+def search_chat(engine: Engine, text: str, limit: int) -> list[ChatMessage]:
+    """The `limit` most recent chat messages containing `text` (ignoring case), newest first."""
+    with Session(engine) as session:
+        return list(session.scalars(
+            select(ChatMessage)
+            .where(ChatMessage.content.icontains(text, autoescape=True))
+            .order_by(ChatMessage.id.desc())
+            .limit(limit)
+        ).all())
+
+
+def describe_match(message: ChatMessage) -> str:
+    """A search result: where the message is, who sent it and what it says."""
+    who = "user" if message.role == "user" else "you"
+    return f"{label(message)} {who}: {message.content}"
+
+
 def thread_has_replies(engine: Engine, root_id: int) -> bool:
     with Session(engine) as session:
         return session.scalar(select(ChatMessage.id).where(ChatMessage.parent_id == root_id).limit(1)) is not None
