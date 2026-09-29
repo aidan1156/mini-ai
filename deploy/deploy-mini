@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Update mini from git and restart it. Installed as /usr/local/bin/deploy-mini and
 # invoked over SSH by GitHub Actions as a forced command, so keep the env explicit.
+# It runs from there rather than the repo because the git reset below rewrites the
+# repo's copy mid-run; each deploy installs the new version for the next one.
 # Migrations run when mini starts back up (init_db applies pending ones).
 set -euo pipefail
 
@@ -41,24 +43,16 @@ echo "=== deploy $(date -Is) ==="
 cd "$REPO"
 git fetch --prune origin
 
-# One-off: the database moved from database/ to data/. Move it before the reset and
-# clean below, which would otherwise delete database/ once it's no longer ignored.
-# Remove this block once the server has been deployed with data/.
-if [ -f database/database.db ] && [ ! -e data/database.db ]; then
-    echo "--> moving database/database.db to data/"
-    wait_for_workers database/database.db
-    sudo systemctl stop mini
-    mkdir -p data
-    mv database/database.db data/database.db
-    rmdir database 2>/dev/null || true
-fi
-
 REF=origin/main
 echo "--> deploying $REF ($(git rev-parse --short "$REF"))"
 git reset --hard "$REF"
 git clean -fd  # not -x: keeps ignored files (.env, data/, .venv)
 
 uv sync --frozen
+
+# Install this commit's version of this script for the next deploy. Safe mid-run:
+# install writes a new file rather than editing this one, which bash keeps reading.
+sudo install -m 755 deploy/deploy-mini /usr/local/bin/deploy-mini
 
 if [ ! -f .env ]; then
     echo "--> no .env yet, so not starting mini (the service waits for it too)"
