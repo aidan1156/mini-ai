@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 
 import aiohttp
 
-from mini.api.public_models import AttachmentOut, ChatMessageOut, SendMessageIn
+from mini.api.public_models import AttachmentOut, ChatMessageOut, SendMessageIn, VoiceNoteIn
 
 # The server pings every 15s, so a minute of silence means the connection is dead.
 EVENTS_TIMEOUT = aiohttp.ClientTimeout(total=None, sock_read=60)
@@ -25,9 +25,19 @@ class MiniClient:
         await self.session.close()
 
     async def send_message(
-        self, content: str, parent_id: int | None = None, attachment_ids: list[int] | None = None
+        self,
+        content: str,
+        parent_id: int | None = None,
+        attachment_ids: list[int] | None = None,
+        voice_note: tuple[int, float | None] | None = None,
     ) -> ChatMessageOut:
-        body = SendMessageIn(content=content, parent_id=parent_id, attachment_ids=attachment_ids or [])
+        """Send mini a message. For a voice note, pass (recording's attachment id, duration)."""
+        body = SendMessageIn(
+            content=content,
+            parent_id=parent_id,
+            attachment_ids=attachment_ids or [],
+            voice_note=VoiceNoteIn(attachment_id=voice_note[0], duration=voice_note[1]) if voice_note else None,
+        )
         async with self.session.post("/messages", json=body.model_dump()) as response:
             response.raise_for_status()
             return ChatMessageOut.model_validate(await response.json())

@@ -1,5 +1,6 @@
 import json
 import os
+from collections.abc import Collection
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -7,6 +8,7 @@ from openai import AsyncOpenAI
 from mini.llm.base import Message, Tool, ToolCall
 
 DEFAULT_MODEL = "gpt-5.6-luna"
+DEFAULT_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
 
 
 class OpenAILLM:
@@ -16,11 +18,24 @@ class OpenAILLM:
     whole conversation. The model's reasoning comes back encrypted and is kept
     on the assistant Message (`provider_data`) so it can be sent back on the
     next call of a tool loop.
+
+    Also transcribes audio (a Transcriber), with OPENAI_TRANSCRIBE_MODEL.
     """
 
     def __init__(self, model: str | None = None, client: AsyncOpenAI | None = None):
         self.model = model or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
+        self.transcribe_model = os.environ.get("OPENAI_TRANSCRIBE_MODEL", DEFAULT_TRANSCRIBE_MODEL)
         self.client = client or AsyncOpenAI()
+
+    async def transcribe(self, audio: bytes, filename: str, expected_words: Collection[str] = ()) -> str:
+        kwargs: dict[str, Any] = {}
+        if expected_words:
+            # The prompt steers spelling: names in it come back spelled the same way.
+            kwargs["prompt"] = f"Names that may come up: {', '.join(expected_words)}."
+        transcription = await self.client.audio.transcriptions.create(
+            model=self.transcribe_model, file=(filename, audio), **kwargs
+        )
+        return transcription.text.strip()
 
     async def complete(self, system: str, messages: list[Message], tools: list[Tool]) -> Message:
         kwargs: dict[str, Any] = {}

@@ -2,8 +2,9 @@
 
 Every request needs `Authorization: Bearer <MINI_API_TOKEN>`.
 
-- POST /messages: send the orchestrator a message. Returns the saved message
-  straight away; replies arrive later on the event stream.
+- POST /messages: send the orchestrator a message (or a voice note, which is
+  transcribed first). Returns the saved message straight away; replies
+  arrive later on the event stream.
 - POST /attachments: upload a file (multipart, field `file`) to send with a
   message: pass the returned id in the message's `attachment_ids`.
 - GET /attachments/{id}: download a file sent with a message.
@@ -14,6 +15,7 @@ Every request needs `Authorization: Bearer <MINI_API_TOKEN>`.
 """
 
 import asyncio
+import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -33,9 +35,11 @@ from mini.config import load_config
 from mini.database import init_db
 from mini.database.models import ChatMessage
 from mini.llm.openai_adapter import OpenAILLM
-from mini.orchestrator import chat, routines
+from mini.orchestrator import chat, context, routines
 from mini.orchestrator.orchestrator import Orchestrator
 from mini.workers import worker
+
+logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 20
 
@@ -61,7 +65,9 @@ async def lifespan(app: FastAPI):
     app.state.engine = init_db()
     # Workers run inside this process, so any still marked running were cut off by a restart.
     worker.mark_interrupted(app.state.engine)
-    app.state.orchestrator = Orchestrator(app.state.engine, OpenAILLM(), projects_dir)
+    llm = OpenAILLM()
+    app.state.transcriber = llm
+    app.state.orchestrator = Orchestrator(app.state.engine, llm, projects_dir)
 
     scheduler = asyncio.create_task(
         routines.run_scheduler(app.state.engine, app.state.orchestrator.start_routine)
@@ -85,13 +91,37 @@ async def send_message(body: SendMessageIn, request: Request) -> ChatMessageOut:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"No message {parent_id}")
             parent_id = parent.parent_id or parent.id  # threads are one level deep
 
+    content, voice_note = body.content, None
+    if body.voice_note is not None:
+        content = await _transcribe(request, body.voice_note.attachment_id)
+        voice_note = (body.voice_note.attachment_id, body.voice_note.duration)
+
     try:
         message = request.app.state.orchestrator.handle_user_message(
-            body.content, parent_id, body.attachment_ids
+            content, parent_id, body.attachment_ids, voice_note
         )
     except attachments.AttachmentError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return ChatMessageOut.model_validate(message)
+
+
+async def _transcribe(request: Request, attachment_id: int) -> str:
+    """Transcribe an uploaded, not yet sent recording."""
+    recording = attachments.get(request.app.state.engine, attachment_id)
+    if recording is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"No attachment {attachment_id}")
+    if recording.chat_message_id is not None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Attachment {attachment_id} is already on another message")
+
+    try:
+        transcript = await request.app.state.transcriber.transcribe(
+            attachments.path(recording).read_bytes(), recording.filename,
+            expected_words=["Mini", *context.project_names(load_config().projects_dir)],
+        )
+    except Exception as e:
+        logger.exception("Couldn't transcribe attachment %s", attachment_id)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Couldn't transcribe the voice note: {e}")
+    return transcript or "(no speech recognised)"
 
 
 @app.post("/attachments", status_code=status.HTTP_201_CREATED)

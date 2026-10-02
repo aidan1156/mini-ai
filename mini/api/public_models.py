@@ -17,6 +17,15 @@ class AttachmentOut(BaseModel):
     size: int  # bytes
 
 
+class VoiceNoteOut(BaseModel):
+    """Set on a message that's a voice note; its content is the transcript."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    attachment_id: int  # the recording (also in the message's attachments)
+    duration: float | None  # seconds
+
+
 class ChatMessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -26,6 +35,12 @@ class ChatMessageOut(BaseModel):
     parent_id: int | None  # the top-level message whose thread this is in
     created_at: datetime
     attachments: list[AttachmentOut] = []
+    voice_note: VoiceNoteOut | None = None
+
+
+class VoiceNoteIn(BaseModel):
+    attachment_id: int  # the uploaded recording; the server transcribes it
+    duration: float | None = None  # seconds
 
 
 class SendMessageIn(BaseModel):
@@ -33,11 +48,15 @@ class SendMessageIn(BaseModel):
     parent_id: int | None = None  # reply in this message's thread
     # Files uploaded with POST /attachments to send with the message.
     attachment_ids: list[int] = []
+    # Send a voice note instead of text: its transcript becomes the content.
+    voice_note: VoiceNoteIn | None = None
 
     @model_validator(mode="after")
-    def _not_empty(self) -> "SendMessageIn":
-        if not self.content.strip() and not self.attachment_ids:
-            raise ValueError("A message needs content or attachments")
+    def _check(self) -> "SendMessageIn":
+        if self.voice_note is not None and self.content.strip():
+            raise ValueError("A voice note's content is its transcript, so leave content empty")
+        if not self.content.strip() and not self.attachment_ids and self.voice_note is None:
+            raise ValueError("A message needs content, attachments or a voice note")
         return self
 
 

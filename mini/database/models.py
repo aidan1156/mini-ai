@@ -84,6 +84,8 @@ class ChatMessage(Base):
     attachments: Mapped[list["Attachment"]] = relationship(
         order_by="Attachment.id", lazy="selectin", passive_deletes=True
     )
+    # Set if the message is a voice note (its content is then the transcript).
+    voice_note: Mapped["VoiceNote | None"] = relationship(lazy="selectin", passive_deletes=True)
 
 
 class Attachment(Base):
@@ -99,6 +101,19 @@ class Attachment(Base):
     filename: Mapped[str]
     content_type: Mapped[str]
     size: Mapped[int]  # bytes
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+
+
+class VoiceNote(Base):
+    """Marks a chat message as a voice note: its content is the transcript of `attachment_id`."""
+
+    __tablename__ = "voice_notes"
+
+    chat_message_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"), primary_key=True
+    )
+    attachment_id: Mapped[int] = mapped_column(ForeignKey("attachments.id"), unique=True)  # the recording
+    duration: Mapped[float | None]  # seconds, if the client knew it
     created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
 
 

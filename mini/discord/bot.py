@@ -78,25 +78,40 @@ class MiniBot(discord.Client):
         else:
             return
 
+        # A voice note is a recording attachment on a message flagged as a voice message.
+        recording = None
+        if message.flags.voice:
+            recording = next((a for a in message.attachments if a.is_voice_message()), None)
+        files = [a for a in message.attachments if a is not recording]
+
+        # Start typing now: a voice note is transcribed before the API answers.
+        typing = asyncio.create_task(self._type_until_posted(channel))
+        self._typing_tasks.add(typing)
+        typing.add_done_callback(self._typing_tasks.discard)
+
         try:
-            attachment_ids = await self._upload_attachments(message)
-            if not message.content and not attachment_ids:
+            attachment_ids = await self._upload_attachments(message, files)
+            voice_note = None
+            if recording is not None:
+                voice_note = (await self._upload_attachments(message, [recording]) or [None])[0]
+            if not message.content and not attachment_ids and voice_note is None:
+                typing.cancel()
                 return  # only files, and none could be sent (already flagged)
-            sent = await self.api.send_message(message.content, parent_id, attachment_ids)
+            sent = await self.api.send_message(
+                message.content, parent_id, attachment_ids,
+                voice_note=(voice_note, recording.duration) if voice_note is not None else None,
+            )
         except aiohttp.ClientError:
             logger.exception("Couldn't send message to mini")
+            typing.cancel()
             await message.add_reaction("⚠️")
             return
         self._link(sent.id, message)
 
-        task = asyncio.create_task(self._type_until_posted(channel))
-        self._typing_tasks.add(task)
-        task.add_done_callback(self._typing_tasks.discard)
-
-    async def _upload_attachments(self, message: discord.Message) -> list[int]:
-        """Upload the message's files to mini, returning their ids. Too-big ones get a ⚠️."""
+    async def _upload_attachments(self, message: discord.Message, files: list[discord.Attachment]) -> list[int]:
+        """Upload files to mini, returning their ids. Too-big ones get a ⚠️ on the message."""
         ids = []
-        for attachment in message.attachments:
+        for attachment in files:
             if attachment.size > MAX_SIZE:
                 logger.warning("Skipping %s: %s bytes is over mini's limit", attachment.filename, attachment.size)
                 await message.add_reaction("⚠️")

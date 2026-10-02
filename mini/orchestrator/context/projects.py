@@ -3,13 +3,17 @@
 from pathlib import Path
 
 
-def projects(projects_dir: Path) -> str:
-    """The project folders workers can run in, one per line."""
-    names = sorted(
+def project_names(projects_dir: Path) -> list[str]:
+    """The project folders workers can run in."""
+    return sorted(
         (p.name for p in projects_dir.iterdir() if p.is_dir() and not p.name.startswith(".")),
         key=str.lower,
     )
-    return "\n".join(f"- {name}" for name in names) or "(none yet)"
+
+
+def projects(projects_dir: Path) -> str:
+    """The project folders workers can run in, one per line."""
+    return "\n".join(f"- {name}" for name in project_names(projects_dir)) or "(none yet)"
 
 
 def project_path(projects_dir: Path, project: str) -> Path | None:

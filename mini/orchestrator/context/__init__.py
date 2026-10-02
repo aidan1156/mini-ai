@@ -17,7 +17,7 @@ from mini.orchestrator.context.conversations import (
     recent_conversations,
     run_conversations,
 )
-from mini.orchestrator.context.projects import project_path, projects
+from mini.orchestrator.context.projects import project_names, project_path, projects
 from mini.orchestrator.context.transcripts import transcript
 
 __all__ = [
@@ -26,6 +26,7 @@ __all__ = [
     "describe_thread",
     "label",
     "owned_conversations",
+    "project_names",
     "project_path",
     "projects",
     "recent_conversations",

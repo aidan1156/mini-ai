@@ -12,7 +12,7 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from mini import attachments
-from mini.database.models import ChatMessage
+from mini.database.models import ChatMessage, VoiceNote
 
 _subscribers: set[asyncio.Queue[ChatMessage]] = set()
 
@@ -23,19 +23,29 @@ def send_message(
     content: str,
     parent_id: int | None = None,
     attachment_ids: Collection[int] = (),
+    voice_note: tuple[int, float | None] | None = None,
 ) -> ChatMessage:
     """Add a message to the chat. `parent_id` must be a top-level message (or None).
 
     `attachment_ids` are uploaded files (see mini.attachments) to send with it;
     raises AttachmentError, saving nothing, if any are missing or already used.
+    `voice_note` is (recording's attachment id, duration in seconds) for a voice
+    note, whose `content` is then its transcript.
     """
+    attachment_ids = list(attachment_ids)
+    if voice_note is not None and voice_note[0] not in attachment_ids:
+        attachment_ids.append(voice_note[0])  # the recording is attached too
+
     with Session(engine, expire_on_commit=False) as session:
         message = ChatMessage(role=role, content=content, parent_id=parent_id)
         session.add(message)
         session.flush()  # for the id
         attachments.attach(session, attachment_ids, message.id)
+        if voice_note is not None:
+            recording_id, duration = voice_note
+            session.add(VoiceNote(chat_message_id=message.id, attachment_id=recording_id, duration=duration))
         session.commit()
-        session.refresh(message, ["attachments"])
+        session.refresh(message, ["attachments", "voice_note"])
 
     for queue in _subscribers:
         queue.put_nowait(message)

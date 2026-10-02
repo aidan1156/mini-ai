@@ -80,15 +80,28 @@ def render(message: ChatMessage) -> Message:
 
     The user's messages get a [#id] prefix and their attachments' paths (so they
     can be handed to workers); the orchestrator's own just name what it sent.
+    A voice note is marked as one, since its content is a transcript, and its
+    recording isn't listed.
     """
     if message.role == "user":
-        lines = [f"{label(message)} {message.content}".rstrip()]
-        lines += [f"[attached: {attachments.describe(a)}]" for a in message.attachments]
+        prefix = label(message)
+        recording_id = None
+        if voice_note := message.voice_note:
+            recording_id = voice_note.attachment_id
+            length = f" {_duration(voice_note.duration)}" if voice_note.duration else ""
+            prefix = f"{prefix[:-1]}, voice note{length}]"
+        lines = [f"{prefix} {message.content}".rstrip()]
+        lines += [f"[attached: {attachments.describe(a)}]" for a in message.attachments if a.id != recording_id]
     else:
         lines = [message.content]
         if message.attachments:
             lines.append(f"(sent with: {', '.join(a.filename for a in message.attachments)})")
     return Message(role=message.role, content="\n".join(lines))
+
+
+def _duration(seconds: float) -> str:
+    minutes, seconds = divmod(round(seconds), 60)
+    return f"{minutes}:{seconds:02d}"
 
 
 def _linked_workers_note(engine: Engine, messages: dict[int, ChatMessage]) -> str | None:

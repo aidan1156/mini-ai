@@ -4,7 +4,7 @@ The orchestrator only talks to `LLM`; each provider gets an adapter that
 converts these types to and from its own API format.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
@@ -40,4 +40,13 @@ class Message:
 class LLM(Protocol):
     async def complete(self, system: str, messages: list[Message], tools: list[Tool]) -> Message:
         """Return the model's next assistant message."""
+        ...
+
+
+class Transcriber(Protocol):
+    async def transcribe(self, audio: bytes, filename: str, expected_words: Collection[str] = ()) -> str:
+        """Return the text spoken in `audio` (the filename's extension gives its format).
+
+        `expected_words` are names likely to come up, to help spell them right.
+        """
         ...
