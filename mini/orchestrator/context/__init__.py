@@ -5,9 +5,11 @@ Use it as `from mini.orchestrator import context` and `context.chat_history(...)
 
 from mini.orchestrator.context.chat_history import (
     chat_history,
+    describe_match,
     describe_thread,
     label,
     render,
+    search_chat,
     strip_label,
     thread_has_replies,
 )
@@ -23,6 +25,7 @@ from mini.orchestrator.context.transcripts import transcript
 __all__ = [
     "chat_history",
     "describe",
+    "describe_match",
     "describe_thread",
     "label",
     "owned_conversations",
@@ -32,6 +35,7 @@ __all__ = [
     "recent_conversations",
     "render",
     "run_conversations",
+    "search_chat",
     "strip_label",
     "thread_has_replies",
     "transcript",

@@ -25,6 +25,8 @@ starting a session / sending an existing one a task.
   - rename a conversation's description (keeps descriptions accurate as the
     work changes, since search depends on them),
   - search conversations by description to find older ones.
+  - search the user's chat (their messages and its own) for some text,
+    getting the N most recent matches.
 
   When the orchestrator reads a transcript, it only gets the text messages:
   the prompts sent to the worker and the worker's text replies, like "I'll
@@ -60,3 +62,4 @@ starting a session / sending an existing one a task.
 - **Session ids:** we generate each session id ourselves (uuid4) and pass it
   via `--session-id`. Resuming with `--resume` only works from the same cwd,
   which is why each conversation stores its `cwd`.
+- **Tests:** `uv run --with pytest pytest` (pytest isn't a locked dependency).
