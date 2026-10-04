@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AttachmentOut(BaseModel):
@@ -26,6 +26,13 @@ class VoiceNoteOut(BaseModel):
     duration: float | None  # seconds
 
 
+class PersonOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str  # their canonical name
+
+
 class ChatMessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -36,6 +43,14 @@ class ChatMessageOut(BaseModel):
     created_at: datetime
     attachments: list[AttachmentOut] = []
     voice_note: VoiceNoteOut | None = None
+    sender: PersonOut | None = None  # who sent a user message, if known
+
+
+class SenderIn(BaseModel):
+    """The platform account sending, which must be linked to a person."""
+
+    provider: str = Field(min_length=1)  # e.g. "discord", "web"
+    external_id: str = Field(min_length=1)  # their id on that platform
 
 
 class VoiceNoteIn(BaseModel):
@@ -50,6 +65,7 @@ class SendMessageIn(BaseModel):
     attachment_ids: list[int] = []
     # Send a voice note instead of text: its transcript becomes the content.
     voice_note: VoiceNoteIn | None = None
+    sender: SenderIn | None = None
 
     @model_validator(mode="after")
     def _check(self) -> "SendMessageIn":

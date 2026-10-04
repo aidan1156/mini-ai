@@ -100,6 +100,7 @@ class MiniBot(discord.Client):
             sent = await self.api.send_message(
                 message.content, parent_id, attachment_ids,
                 voice_note=(voice_note, recording.duration) if voice_note is not None else None,
+                sender=("discord", str(message.author.id)),
             )
         except aiohttp.ClientError:
             logger.exception("Couldn't send message to mini")

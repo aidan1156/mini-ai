@@ -69,8 +69,10 @@ The time is currently {now}.
   about work, prefer the thread where the user last talked about it.
 - Routines are instructions you've saved for yourself, run on a timer or when the
   user asks. When one runs you get a <routine> message with its instructions.
-- The user's messages are prefixed with [#id] or [#id in thread #root]. Don't
-  write these prefixes yourself. "voice note" in the prefix means they spoke it
+- Several people may use the chat. Their messages are prefixed with [#id] or
+  [#id in thread #root], plus "from <name>" when the sender is known, so you
+  can tell who asked for what and address them by name. Don't write these
+  prefixes yourself. "voice note" in the prefix means they spoke it
   and you're reading a transcript, which may have small mistakes.
 - Be brief.
 
@@ -99,13 +101,17 @@ class Orchestrator:
         parent_id: int | None = None,
         attachment_ids: Collection[int] = (),
         voice_note: tuple[int, float | None] | None = None,
+        sender: tuple[str, str] | None = None,
     ) -> ChatMessage:
         """Save the user's message and return it; the orchestrator replies in the background.
 
-        For a voice note, `content` is its transcript (see chat.send_message).
+        For a voice note, `content` is its transcript, and `sender` is the
+        (provider, external id) of who sent it (see chat.send_message).
         Raises AttachmentError if any of `attachment_ids` can't be attached.
         """
-        user_message = chat.send_message(self.engine, "user", content, parent_id, attachment_ids, voice_note)
+        user_message = chat.send_message(
+            self.engine, "user", content, parent_id, attachment_ids, voice_note, sender
+        )
         self._in_background(self._reply(user_message))
         return user_message
 

@@ -78,13 +78,15 @@ def chat_history(
 def render(message: ChatMessage) -> Message:
     """A chat message as the orchestrator sees it, with any attachments listed.
 
-    The user's messages get a [#id] prefix and their attachments' paths (so they
-    can be handed to workers); the orchestrator's own just name what it sent.
-    A voice note is marked as one, since its content is a transcript, and its
-    recording isn't listed.
+    The user's messages get a [#id] prefix naming who sent them (when known), and
+    their attachments' paths (so they can be handed to workers); the
+    orchestrator's own just name what it sent. A voice note is marked as one,
+    since its content is a transcript, and its recording isn't listed.
     """
     if message.role == "user":
         prefix = label(message)
+        if message.sender is not None:
+            prefix = f"{prefix[:-1]} from {message.sender.name}]"
         recording_id = None
         if voice_note := message.voice_note:
             recording_id = voice_note.attachment_id
@@ -144,8 +146,7 @@ def search_chat(engine: Engine, text: str, limit: int) -> list[ChatMessage]:
 
 def describe_match(message: ChatMessage) -> str:
     """A search result: where the message is, who sent it and what it says."""
-    who = "user" if message.role == "user" else "you"
-    return f"{label(message)} {who}: {message.content}"
+    return f"{label(message)} {_who(message, unknown='user')}: {message.content}"
 
 
 def thread_has_replies(engine: Engine, root_id: int) -> bool:
@@ -164,8 +165,14 @@ def describe_thread(engine: Engine, root_id: int) -> str:
         if not replies:
             return f"{where} (no replies yet; this starts it)"
         last = replies[-1]
-        who = "the user" if last.role == "user" else "you"
-        return f"{where} ({len(replies)} replies, the latest from {who}: {_quote(last.content)})"
+        return f"{where} ({len(replies)} replies, the latest from {_who(last)}: {_quote(last.content)})"
+
+
+def _who(message: ChatMessage, unknown: str = "the user") -> str:
+    """Who sent a message, as the orchestrator is told: their name, `unknown` or "you"."""
+    if message.role != "user":
+        return "you"
+    return message.sender.name if message.sender is not None else unknown
 
 
 def _refer_to(message: ChatMessage) -> str:

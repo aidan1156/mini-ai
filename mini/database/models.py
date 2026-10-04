@@ -86,6 +86,9 @@ class ChatMessage(Base):
     )
     # Set if the message is a voice note (its content is then the transcript).
     voice_note: Mapped["VoiceNote | None"] = relationship(lazy="selectin", passive_deletes=True)
+    # Who sent a user message (None for the orchestrator's, and for old messages).
+    sender_id: Mapped[int | None] = mapped_column(ForeignKey("people.id"))
+    sender: Mapped["Person | None"] = relationship(lazy="selectin")
 
 
 class Attachment(Base):
@@ -101,6 +104,30 @@ class Attachment(Base):
     filename: Mapped[str]
     content_type: Mapped[str]
     size: Mapped[int]  # bytes
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+
+
+class Person(Base):
+    """Someone who sends messages, whichever platform they use (see PersonIdentity)."""
+
+    __tablename__ = "people"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str]  # canonical name, how mini refers to them
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+    updated_at: Mapped[datetime] = mapped_column(
+        server_default=func.current_timestamp(), onupdate=func.current_timestamp()
+    )
+
+
+class PersonIdentity(Base):
+    """A person's account on a platform, e.g. ('discord', '123456789') or ('web', 'aidan')."""
+
+    __tablename__ = "person_identities"
+
+    provider: Mapped[str] = mapped_column(primary_key=True)
+    external_id: Mapped[str] = mapped_column(primary_key=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("people.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
 
 

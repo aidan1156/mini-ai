@@ -29,7 +29,7 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from mini import attachments
+from mini import attachments, people
 from mini.api.public_models import AttachmentOut, ChatMessageOut, MessagePage, SendMessageIn
 from mini.config import load_config
 from mini.database import init_db
@@ -98,10 +98,13 @@ async def send_message(body: SendMessageIn, request: Request) -> ChatMessageOut:
 
     try:
         message = request.app.state.orchestrator.handle_user_message(
-            content, parent_id, body.attachment_ids, voice_note
+            content, parent_id, body.attachment_ids, voice_note,
+            sender=(body.sender.provider, body.sender.external_id) if body.sender else None,
         )
     except attachments.AttachmentError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    except people.UnknownIdentityError as e:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(e))
     return ChatMessageOut.model_validate(message)
 
 

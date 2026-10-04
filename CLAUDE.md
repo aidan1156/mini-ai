@@ -43,6 +43,12 @@ starting a session / sending an existing one a task.
 - `mini/orchestrator/worker_updates.py` decides whether a worker's reply gets
   posted to the user's chat, either in the owner message's thread
   (`WorkerMessage.owner_message_id`) or as a new top-level message.
+- `mini/people.py` holds the people who send messages: a person has a
+  canonical `name` and links to platform accounts (`person_identities`:
+  provider + external id, e.g. `discord`/`123` or `web`/`aidan`), so they're one
+  person across clients. People are added by hand (`python -m mini.people add` /
+  `link`); a message from an unlinked account raises `UnknownIdentityError`
+  (HTTP 403) instead of creating anyone.
 - `mini/mcp_servers/` holds MCP servers that give workers extra tools (e.g.
   `browser.py`, which hands tasks to a Browser Use cloud agent, capped at $1
   a task). `worker_mcp_args()` returns the `claude` flags that load them,
