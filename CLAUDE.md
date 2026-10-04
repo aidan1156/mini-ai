@@ -49,6 +49,15 @@ starting a session / sending an existing one a task.
   person across clients. People are added by hand (`python -m mini.people add` /
   `link`); a message from an unlinked account raises `UnknownIdentityError`
   (HTTP 403) instead of creating anyone.
+- `mini/memory.py` is the long-term memory: small atomic facts (`memories`),
+  each optionally tied to a `sources` row (an attachment or a chat message).
+  Search merges sqlite-vec nearest-embedding results with FTS5 text matches
+  (max 20); saving a fact first has an LLM call check it against similar
+  memories (add / skip / update, deleting out-of-date ones).
+  `mini/memory_tools.py` defines the tools once, used by the orchestrator
+  (facts cite the message that started the turn) and by the workers' MCP server
+  `mcp_servers/memory.py` (search, create, update; the worker passes the source).
+  Embeddings come from `OpenAILLM.embed` (`OPENAI_EMBEDDING_MODEL`).
 - `mini/mcp_servers/` holds MCP servers that give workers extra tools (e.g.
   `browser.py`, which hands tasks to a Browser Use cloud agent, capped at $1
   a task). `worker_mcp_args()` returns the `claude` flags that load them,

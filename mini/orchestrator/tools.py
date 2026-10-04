@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from mini import attachments as attachment_store
 from mini.database.models import ChatMessage, Routine, WorkerConversation
 from mini.llm import Tool, ToolCall
+from mini.memory import MemoryStore, SourceRef
+from mini.memory_tools import memory_tools
 from mini.orchestrator import chat, context, routines
 from mini.orchestrator.owners import Placement, resolve_owner
 from mini.workers import worker
@@ -47,6 +49,8 @@ class ToolRunner:
     can pick from. Once it has posted, later messages this turn go in the same place.
     Workers started this turn are part of `routine_run_id`, if set.
     `start_routine(routine_id, owner_message_id)` queues a routine run.
+    `memory` gives the memory tools; facts saved this turn cite the message that
+    started it (`owner_id`) as their source.
     """
 
     def __init__(
@@ -58,6 +62,7 @@ class ToolRunner:
         owner_id: int | None,
         placement: Placement,
         routine_run_id: int | None = None,
+        memory: MemoryStore | None = None,
     ):
         self.engine = engine
         self.on_turn_end = on_turn_end
@@ -66,11 +71,13 @@ class ToolRunner:
         self.owner_id = owner_id
         self.placement = placement
         self.routine_run_id = routine_run_id
+        self.memory = memory
+        self.source_message_id = owner_id  # unlike owner_id, doesn't move to mini's own message
         self.touched: set[int] = set()  # conversations started or messaged this turn
         self.posted: list[ChatMessage] = []
 
     def tools(self) -> list[Tool]:
-        return [
+        tools = [
             Tool(
                 name="start_conversation",
                 description=(
@@ -223,6 +230,9 @@ class ToolRunner:
             ),
             self._send_chat_message_tool(),
         ]
+        if self.memory is not None:
+            tools += memory_tools(self.memory, source=SourceRef(message_id=self.source_message_id))
+        return tools
 
     def _send_chat_message_tool(self) -> Tool:
         properties: dict[str, Any] = {

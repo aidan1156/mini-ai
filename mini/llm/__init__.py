@@ -1,3 +1,3 @@
-from mini.llm.base import LLM, Message, Tool, ToolCall, Transcriber
+from mini.llm.base import LLM, Embedder, Message, Tool, ToolCall, Transcriber
 
-__all__ = ["LLM", "Message", "Tool", "ToolCall", "Transcriber"]
+__all__ = ["LLM", "Embedder", "Message", "Tool", "ToolCall", "Transcriber"]

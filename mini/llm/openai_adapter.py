@@ -9,6 +9,7 @@ from mini.llm.base import Message, Tool, ToolCall
 
 DEFAULT_MODEL = "gpt-5.6-luna"
 DEFAULT_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 
 
 class OpenAILLM:
@@ -19,13 +20,19 @@ class OpenAILLM:
     on the assistant Message (`provider_data`) so it can be sent back on the
     next call of a tool loop.
 
-    Also transcribes audio (a Transcriber), with OPENAI_TRANSCRIBE_MODEL.
+    Also transcribes audio (a Transcriber), with OPENAI_TRANSCRIBE_MODEL, and
+    embeds text (an Embedder), with OPENAI_EMBEDDING_MODEL.
     """
 
     def __init__(self, model: str | None = None, client: AsyncOpenAI | None = None):
         self.model = model or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
         self.transcribe_model = os.environ.get("OPENAI_TRANSCRIBE_MODEL", DEFAULT_TRANSCRIBE_MODEL)
+        self.embedding_model = os.environ.get("OPENAI_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
         self.client = client or AsyncOpenAI()
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        response = await self.client.embeddings.create(model=self.embedding_model, input=texts)
+        return [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
 
     async def transcribe(self, audio: bytes, filename: str, expected_words: Collection[str] = ()) -> str:
         kwargs: dict[str, Any] = {}

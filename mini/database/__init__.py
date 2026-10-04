@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import sqlite_vec
 from sqlalchemy import Engine, create_engine, event
 
 from mini.database.migrations import run_migrations
@@ -16,10 +17,14 @@ def init_db(database_path: Path = DATABASE_PATH) -> Engine:
 
     engine = create_engine(f"sqlite:///{database_path.as_posix()}")
 
-    # SQLite ignores foreign keys unless this is set on every connection.
     @event.listens_for(engine, "connect")
-    def _enable_foreign_keys(dbapi_conn, _):
+    def _setup_connection(dbapi_conn, _):
+        # SQLite ignores foreign keys unless this is set on every connection.
         dbapi_conn.execute("PRAGMA foreign_keys = ON")
+        # sqlite-vec's vector functions, for searching memories.
+        dbapi_conn.enable_load_extension(True)
+        sqlite_vec.load(dbapi_conn)
+        dbapi_conn.enable_load_extension(False)
 
     return engine
 

@@ -43,6 +43,15 @@ class LLM(Protocol):
         ...
 
 
+class Embedder(Protocol):
+    # Names the model, since vectors from different models can't be compared.
+    embedding_model: str
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return one embedding vector per text, in order."""
+        ...
+
+
 class Transcriber(Protocol):
     async def transcribe(self, audio: bytes, filename: str, expected_words: Collection[str] = ()) -> str:
         """Return the text spoken in `audio` (the filename's extension gives its format).

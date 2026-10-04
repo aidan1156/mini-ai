@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # in other repos, so PYTHONPATH points `-m` back at this one.
 SERVERS = {
     "browser": "mini.mcp_servers.browser",
+    "memory": "mini.mcp_servers.memory",
 }
 
 

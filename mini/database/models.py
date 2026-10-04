@@ -131,6 +131,37 @@ class PersonIdentity(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
 
 
+class Source(Base):
+    """Where memories came from: a file or a chat message (exactly one is set)."""
+
+    __tablename__ = "sources"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    attachment_id: Mapped[int | None] = mapped_column(ForeignKey("attachments.id", ondelete="CASCADE"))
+    message_id: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+
+    attachment: Mapped["Attachment | None"] = relationship(lazy="selectin")
+
+
+class Memory(Base):
+    """A small fact saved for the orchestrator (see mini/memory.py)."""
+
+    __tablename__ = "memories"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    content: Mapped[str]
+    embedding: Mapped[bytes]  # float32 vector of `content`
+    embedding_model: Mapped[str]
+    source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+    updated_at: Mapped[datetime] = mapped_column(
+        server_default=func.current_timestamp(), onupdate=func.current_timestamp()
+    )
+
+    source: Mapped["Source | None"] = relationship(lazy="selectin")
+
+
 class VoiceNote(Base):
     """Marks a chat message as a voice note: its content is the transcript of `attachment_id`."""
 

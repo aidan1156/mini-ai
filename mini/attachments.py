@@ -78,8 +78,11 @@ def attach(session: Session, attachment_ids: Collection[int], chat_message_id: i
 
 
 def describe(attachment: Attachment) -> str:
-    """One line for the orchestrator: name, type, size and where a worker can read it."""
-    return f"{attachment.filename} ({attachment.content_type}, {_size(attachment.size)}) at {path(attachment)}"
+    """One line for the orchestrator: name, type, size, where a worker can read it, and its id."""
+    return (
+        f"{attachment.filename} ({attachment.content_type}, {_size(attachment.size)}) "
+        f"at {path(attachment)}, attachment #{attachment.id}"
+    )
 
 
 def _safe_filename(filename: str) -> str:

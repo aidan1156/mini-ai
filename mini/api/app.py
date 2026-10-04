@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
     worker.mark_interrupted(app.state.engine)
     llm = OpenAILLM()
     app.state.transcriber = llm
-    app.state.orchestrator = Orchestrator(app.state.engine, llm, projects_dir)
+    app.state.orchestrator = Orchestrator(app.state.engine, llm, projects_dir, embedder=llm)
 
     scheduler = asyncio.create_task(
         routines.run_scheduler(app.state.engine, app.state.orchestrator.start_routine)

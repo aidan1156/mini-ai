@@ -17,6 +17,7 @@ dependencies = [
 	"openai>=2.38.0",
 	"python-multipart>=0.0.29",
 	"sqlalchemy>=2.0.50",
+	"sqlite-vec>=0.1.9",
 	"uvicorn>=0.35.0",
 ]
 
